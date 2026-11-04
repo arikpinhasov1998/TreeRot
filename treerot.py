@@ -842,6 +842,8 @@ def file_manager_command(path, is_file, platform):
     return ["xdg-open", os.path.dirname(path) if is_file else path]
 
 
+LISTING_TIMEOUT = 30                  # seconds before a silent folder listing is abandoned
+MAX_ABANDONED = 16                    # abandoned listing threads allowed to pile up
 FILE_THREADS = 4                      # file listings read at the same time
 FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 
@@ -888,7 +890,10 @@ def run_gui(preload=None, on_ready=None):
             self.file_loading = set()
             self.file_gen = 0         # results from an older tree are ignored
             self.file_queue = []      # folders waiting for one of the listing slots
-            self.file_active = 0      # listing threads running (at most FILE_THREADS)
+            self.file_active = 0      # responsive listings running (at most FILE_THREADS)
+            self.file_token = 0
+            self.file_live = {}       # token -> (generation, folder) of a listing holding a slot
+            self.file_abandoned = set()   # tokens of listings that timed out, thread still blocked
             self.scan_ctx = None      # dates and rules of the scan, for listing files live
             self.n_excluded = 0
             self.scan_elapsed = None
@@ -1420,7 +1425,7 @@ def run_gui(preload=None, on_ready=None):
                     f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
                     f"{n_excl:,} folder(s) excluded | period: {cutoff}")
             elif msg[0] == "files":
-                self._files_loaded(msg[1], msg[2], msg[3], msg[4])
+                self._files_loaded(*msg[1:])
             elif msg[0] == "report_done":
                 self._report_done(msg[1], msg[2])
             elif msg[0] == "error":
@@ -1529,8 +1534,15 @@ def run_gui(preload=None, on_ready=None):
                 self._start_listing(self.file_queue.pop(0))
 
         def _start_listing(self, folder):
-            self.file_active += 1
             gen, ctx, period = self.file_gen, self.scan_ctx, self.period_text
+            if len(self.file_abandoned) >= MAX_ABANDONED:
+                self._files_loaded(gen, folder, [], "Too many earlier listings are stuck "
+                                   "waiting for a server, so this folder was not read.")
+                return
+            self.file_token += 1
+            token = self.file_token
+            self.file_live[token] = (gen, folder)
+            self.file_active += 1
 
             def work():
                 try:
@@ -1538,11 +1550,29 @@ def run_gui(preload=None, on_ready=None):
                                                   ctx["activity"], period)
                 except Exception as e:
                     rows, err = [], f"The files in this folder could not be listed. {e}"
-                self.q.put(("files", gen, folder, rows, err))
+                self.q.put(("files", gen, folder, rows, err, token))
             threading.Thread(target=work, daemon=True).start()
+            self.after(int(LISTING_TIMEOUT * 1000), lambda: self._listing_timeout(token))
 
-        def _files_loaded(self, gen, folder, rows, err):
-            self.file_active = max(0, self.file_active - 1)     # that thread has finished
+        def _listing_timeout(self, token):
+            if token not in self.file_live:
+                return                                   # it answered in time
+            gen, folder = self.file_live.pop(token)
+            self.file_active -= 1
+            self.file_abandoned.add(token)               # the thread may still be blocked
+            self._files_loaded(gen, folder, [], f"The server did not respond within "
+                               f"{LISTING_TIMEOUT:g} seconds, so the files in this folder "
+                               "could not be listed.")
+
+        def _files_loaded(self, gen, folder, rows, err, token=None):
+            if token is not None:
+                if token in self.file_abandoned:         # a late answer after the timeout
+                    self.file_abandoned.discard(token)
+                    return
+                if token not in self.file_live:
+                    return
+                del self.file_live[token]
+                self.file_active -= 1                    # that thread has finished
             self._pump_files()
             if gen != self.file_gen:
                 return

@@ -467,6 +467,84 @@ class FilesInTree(GuiCase):
             self.run_case(d, check)
             self.assertEqual(results["argv"], app.file_manager_command(f, True, app.sys.platform))
 
+    def _hung_listing_case(self, dead_count, max_abandoned=None):
+        """Folders dead0..N block on a gate; 'ok' lists normally. Returns what happened."""
+        import threading
+        real = app.list_folder_files
+        gate = threading.Event()
+        calls = []
+        self.addCleanup(gate.set)
+
+        def fake(path, *a):
+            calls.append(os.path.basename(path))
+            if os.path.basename(path).startswith("dead"):
+                gate.wait(20)
+            return real(path, *a)
+        patches = [mock.patch.object(app, "list_folder_files", fake),
+                   mock.patch.object(app, "LISTING_TIMEOUT", 0.3)]
+        if max_abandoned is not None:
+            patches.append(mock.patch.object(app, "MAX_ABANDONED", max_abandoned))
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        results = {}
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        spec = {"dead%d/x.txt" % n: OLD for n in range(dead_count)}
+        spec["ok/y.txt"] = NEW
+        make_tree(d, spec)
+
+        def check(w):
+            for n in range(dead_count):
+                w._populate(os.path.join(d, "dead%d" % n))
+                w._load_files(os.path.join(d, "dead%d" % n))
+            ok = os.path.join(d, "ok")
+            w._populate(ok)
+            w._load_files(ok)
+
+            def snapshot(tag):
+                results[tag] = {
+                    "texts": [w.tree.item(k, "text") for n in range(dead_count)
+                              for k in w.tree.get_children(os.path.join(d, "dead%d" % n))],
+                    "reasons": [f["reason"] for k, f in w.file_rows.items()
+                                if k.startswith(app.FILEERR_IID)],
+                    "ok_rows": [w.file_rows[k]["name"] for k in w.tree.get_children(ok)
+                                if k.startswith(app.FILE_IID)],
+                    "active": w.file_active, "abandoned": len(w.file_abandoned),
+                    "calls": list(calls)}
+
+            def after_timeout():
+                snapshot("timed_out")
+                gate.set()                          # the dead shares answer, far too late
+                w.after(600, final)
+
+            def final():
+                snapshot("late")
+                self.done = True
+            w.after(1500, after_timeout)
+        self.run_case(d, check)
+        return results
+
+    def test_hung_listings_time_out_and_a_healthy_folder_still_lists(self):
+        r = self._hung_listing_case(4)
+        t = r["timed_out"]
+        self.assertEqual(len(t["reasons"]), 4)
+        self.assertTrue(all("did not respond" in x for x in t["reasons"]))
+        self.assertEqual(t["ok_rows"], ["y.txt"])
+        self.assertEqual(t["active"], 0)
+        late = r["late"]
+        self.assertEqual(len(late["reasons"]), 4)            # late results were discarded
+        self.assertEqual(late["texts"], ["Files could not be listed"] * 4)
+        self.assertEqual(late["abandoned"], 0)
+        self.assertEqual(late["active"], 0)
+
+    def test_too_many_abandoned_listings_show_an_error_instead_of_a_thread(self):
+        r = self._hung_listing_case(4, max_abandoned=1)
+        t = r["timed_out"]
+        self.assertEqual(t["ok_rows"], [])
+        self.assertEqual(len(t["reasons"]), 5)               # 4 timeouts + the refused one
+        self.assertNotIn("ok", t["calls"])
+
 
 def app_messagebox():
     from tkinter import messagebox
