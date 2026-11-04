@@ -773,7 +773,7 @@ def gui_unavailable(reason):
     sys.exit(3)
 
 
-def run_gui(preload=None):
+def run_gui(preload=None, on_ready=None):
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
@@ -958,6 +958,13 @@ def run_gui(preload=None):
                        ).pack(side="left", padx=6)
             ttk.Button(opt3, text="Collapse all", command=self._collapse_all
                        ).pack(side="left")
+            ttk.Label(opt3, text="Show levels:").pack(side="left", padx=(14, 4))
+            self.levels_var = tk.StringVar(value="1")
+            self.levels_cb = ttk.Combobox(opt3, textvariable=self.levels_var, state="readonly",
+                                          width=10, values=["1", "2", "3", "4", "5", "Unlimited"])
+            self.levels_cb.pack(side="left")
+            self.levels_cb.bind("<<ComboboxSelected>>",
+                                lambda e: self._show_levels(self.levels_var.get()))
 
             sum_frame = ttk.Frame(self, padding=(8, 8, 8, 4))
             sum_frame.pack(fill="x")
@@ -1456,6 +1463,28 @@ def run_gui(preload=None):
                     self._close_rec(iid)
                 self.tree.item(self.root_path, open=True)
 
+        def _show_levels(self, value):
+            """Opens the tree to the chosen depth. Display only: the scan has read everything."""
+            if not self.rows:
+                return
+            if value == "Unlimited":
+                self._expand_all()
+                return
+            limit = int(value)
+            self._collapse_all()
+            self.config(cursor="watch")
+            self.update_idletasks()
+            stack = [(self.root_path, 0)]
+            while stack:
+                iid, depth = stack.pop()
+                if depth >= limit:
+                    continue
+                self._populate(iid)
+                self.tree.item(iid, open=True)
+                stack.extend((c, depth + 1) for c in self.tree.get_children(iid)
+                             if c in self.by_path)
+            self.config(cursor="")
+
         def _close_rec(self, iid):
             for c in self.tree.get_children(iid):
                 if not c.endswith(DUMMY):
@@ -1761,6 +1790,8 @@ def run_gui(preload=None):
     if preload:                      # used for testing / screenshots
         app.path_var.set(preload)
         app.after(300, app._start)
+    if on_ready:                     # test hook: on_ready(app) runs once the window is up
+        app.after(300, lambda: on_ready(app))
     try:
         app.mainloop()
     except KeyboardInterrupt:
@@ -2223,6 +2254,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
         <input type="search" id="q" placeholder="Find a folder by name" aria-label="Find a folder by name">
         <button class="btn" type="submit">Find</button>
       </form>
+      <label>Show levels <select id="levels"><option value="">Choose</option></select></label>
       <button class="btn" type="button" id="to-unused">Open to unused folders</button>
       <button class="btn" type="button" id="expand">Expand all</button>
       <button class="btn" type="button" id="collapse">Collapse all</button>
@@ -2527,6 +2559,36 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
     render();
     note.textContent = "All " + nf(total) + " folders are open.";
   });
+  (function () {
+    var sel = document.getElementById("levels"), deepest = 0, q = [[0, 0]], head = 0;
+    while (head < q.length) {
+      var it = q[head++], ks = visKids(it[0]);
+      if (it[1] > deepest) deepest = it[1];
+      for (var k = 0; k < ks.length; k++) q.push([ks[k], it[1] + 1]);
+    }
+    for (var n = 1; n <= Math.min(deepest, 20); n++) {
+      var o = document.createElement("option");
+      o.value = o.textContent = String(n);
+      sel.appendChild(o);
+    }
+    var u = document.createElement("option");
+    u.value = "all"; u.textContent = "Unlimited";
+    sel.appendChild(u);
+    sel.addEventListener("change", function () {
+      if (sel.value === "all") { document.getElementById("expand").click(); return; }
+      if (!sel.value) return;
+      var limit = +sel.value, st = [[0, 0]], h = 0;
+      open = new Set();
+      while (h < st.length) {
+        var x = st[h++], kids = visKids(x[0]);
+        if (x[1] >= limit || !kids.length) continue;
+        open.add(x[0]);
+        for (var j = 0; j < kids.length; j++) st.push([kids[j], x[1] + 1]);
+      }
+      render();
+      note.textContent = "Showing " + limit + " level" + (limit === 1 ? "" : "s") + ".";
+    });
+  })();
   document.getElementById("to-unused").addEventListener("click", function () {
     if (filter === "g" || filter === "x") setFilter("all");
     var first = null, n = 0;
