@@ -830,6 +830,7 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
+FILE_THREADS = 4                      # file listings read at the same time
 FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 
 
@@ -874,6 +875,8 @@ def run_gui(preload=None, on_ready=None):
             self.file_cache = {}      # folder path -> (sorted and filtered rows, number shown)
             self.file_loading = set()
             self.file_gen = 0         # results from an older tree are ignored
+            self.file_queue = []      # folders waiting for one of the listing slots
+            self.file_active = 0      # listing threads running (at most FILE_THREADS)
             self.scan_ctx = None      # dates and rules of the scan, for listing files live
             self.n_excluded = 0
             self.scan_elapsed = None
@@ -1092,6 +1095,9 @@ def run_gui(preload=None, on_ready=None):
             self.tree.bind("<<TreeviewOpen>>", self._on_open)
             self.tree.bind("<<TreeviewClose>>", self._on_close_node)
             self.tree.bind("<<TreeviewSelect>>", self._on_select)
+            self.tree.bind("<ButtonRelease-1>", self._on_click, add="+")
+            self.tree.bind("<Return>", self._on_activate_key, add="+")
+            self.tree.bind("<space>", self._on_activate_key, add="+")
             for b in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
                 self.tree.bind(b, self._context_menu)
             self.menu = tk.Menu(self, tearoff=0)
@@ -1287,6 +1293,7 @@ def run_gui(preload=None, on_ready=None):
                 created_mode, activity = "off", "modified"
             self.scan_ctx = {"lo": lo, "hi": hi, "created": created_mode, "activity": activity}
             self.file_gen += 1        # late file listings from the previous scan are dropped
+            self.file_queue, self.file_loading = [], set()
             self.scan_meta = {
                 "root": root, "excludes": excludes, "excluded_count": 0,
                 "scanned_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -1502,6 +1509,15 @@ def run_gui(preload=None, on_ready=None):
             self.file_loading.add(folder)
             if self.tree.exists(MORE_IID + folder):
                 self.tree.item(MORE_IID + folder, text="Loading files...")
+            self.file_queue.append(folder)
+            self._pump_files()
+
+        def _pump_files(self):
+            while self.file_queue and self.file_active < FILE_THREADS:
+                self._start_listing(self.file_queue.pop(0))
+
+        def _start_listing(self, folder):
+            self.file_active += 1
             gen, ctx, period = self.file_gen, self.scan_ctx, self.period_text
 
             def work():
@@ -1514,6 +1530,8 @@ def run_gui(preload=None, on_ready=None):
             threading.Thread(target=work, daemon=True).start()
 
         def _files_loaded(self, gen, folder, rows, err):
+            self.file_active = max(0, self.file_active - 1)     # that thread has finished
+            self._pump_files()
             if gen != self.file_gen:
                 return
             self.file_loading.discard(folder)
@@ -1532,10 +1550,13 @@ def run_gui(preload=None, on_ready=None):
         def _show_file_page(self, folder):
             rows, shown = self.file_cache[folder]
             more = MORE_IID + folder
+            had_focus = more in self.tree.selection() or self.tree.focus() == more
             if self.tree.exists(more):
                 self.tree.delete(more)
+            first_new = None
             for f in rows[shown:shown + FILE_PAGE]:
                 iid = f.get("iid") or FILE_IID + f["path"]
+                first_new = first_new or iid
                 self.file_rows[iid] = f
                 self.tree.insert(folder, "end", iid=iid, text=f["name"], tags=(f["color"],),
                                  values=(fmt_ts(_file_activity(f) or None), "",
@@ -1546,6 +1567,11 @@ def run_gui(preload=None, on_ready=None):
             if shown < len(rows):
                 self.tree.insert(folder, "end", iid=more,
                                  text=f"Show more ({len(rows) - shown:,} left)...")
+            if had_focus:         # the row the user was on is gone: keep the keyboard usable
+                target = first_new or folder
+                self.tree.focus(target)
+                self.tree.selection_set(target)
+                self.tree.see(target)
 
         def _path_of(self, iid):
             if iid in self.file_rows:
@@ -1566,6 +1592,7 @@ def run_gui(preload=None, on_ready=None):
             self.levels_var.set("")
             self.file_gen += 1
             self.file_rows, self.file_cache, self.file_loading = {}, {}, set()
+            self.file_queue = []
             self.tree.delete(*self.tree.get_children())
             if not self.rows:
                 return
@@ -1730,20 +1757,32 @@ def run_gui(preload=None, on_ready=None):
             sel = self.tree.selection()
             if not sel:
                 return
-            iid = sel[0]
-            if iid.startswith(MORE_IID):
-                folder = iid[len(MORE_IID):]
-                if folder in self.file_cache:
-                    self._show_file_page(folder)
-                else:
-                    self._load_files(folder)
-            elif iid in self.file_rows:
+            iid = sel[0]       # a "Show more" row is only activated by click or Enter/space
+            if iid in self.file_rows:
                 self.status_var.set(self.file_rows[iid]["path"])
             elif iid in self.by_path:
                 i = self.by_path[iid]["info"]
                 self.status_var.set(
                     f"{i.path}  |  {i.total_files:,} files, {fmt_size(i.total_size)}"
                     + (f"  |  error: {i.error}" if i.error else ""))
+
+        def _activate_more(self, iid):
+            folder = iid[len(MORE_IID):]
+            if folder in self.file_cache:
+                self._show_file_page(folder)
+            else:
+                self._load_files(folder)
+
+        def _on_click(self, e):
+            iid = self.tree.identify_row(e.y)
+            if iid.startswith(MORE_IID):
+                self._activate_more(iid)
+
+        def _on_activate_key(self, _e):
+            iid = self.tree.focus()
+            if iid.startswith(MORE_IID):
+                self._activate_more(iid)
+                return "break"
 
         def _context_menu(self, e):
             iid = self.tree.identify_row(e.y)

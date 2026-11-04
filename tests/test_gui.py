@@ -186,7 +186,7 @@ class FilesInTree(GuiCase):
                 def loaded():
                     more = app.MORE_IID + big
                     w.tree.selection_set(more)
-                    w._on_select(None)
+                    w._activate_more(more)
                     results["files"] = sum(k.startswith(app.FILE_IID)
                                            for k in w.tree.get_children(big))
                     results["more_left"] = w.tree.exists(more)
@@ -332,6 +332,96 @@ class FilesInTree(GuiCase):
                 self.wait_files(w, gone, loaded)
             self.run_case(d, check)
             self.assertEqual(len(results["kids"]), 1)
+
+    def test_arrowing_onto_the_more_row_loads_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"big/f%04d.txt" % n: OLD for n in range(5)})
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                more = app.MORE_IID + big
+                w.tree.selection_set(more)
+                w._on_select(None)
+                results["loading"] = big in w.file_loading
+                results["cached"] = big in w.file_cache
+                self.done = True
+            self.run_case(d, check)
+            self.assertFalse(results["loading"])
+            self.assertFalse(results["cached"])
+
+    def test_click_and_enter_on_more_load_and_keep_focus_usable(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"big/f%04d.txt" % n: OLD for n in range(app.FILE_PAGE + 5)})
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                more = app.MORE_IID + big
+                w.tree.identify_row = lambda y: more
+                w.tree.selection_set(more)
+                w._on_click(mock.Mock(y=1))                 # a mouse click loads page 1
+
+                def page1():
+                    first = w.tree.get_children(big)[0]
+                    results["sel1"] = (w.tree.selection(), w.tree.focus(), first)
+                    more2 = app.MORE_IID + big
+                    w.tree.selection_set(more2)
+                    w.tree.focus(more2)
+                    results["break"] = w._on_activate_key(None)   # Enter on the focused row
+                    kids = w.tree.get_children(big)
+                    new_first = [k for k in kids if k.startswith(app.FILE_IID)][app.FILE_PAGE]
+                    results["sel2"] = (w.tree.selection(), w.tree.focus(), new_first)
+                self.wait_files(w, big, page1)
+            self.run_case(d, check)
+            sel, focus, first = results["sel1"]
+            self.assertEqual((sel, focus), ((first,), first))
+            self.assertEqual(results["break"], "break")
+            sel, focus, first = results["sel2"]
+            self.assertEqual((sel, focus), ((first,), first))
+
+    def test_at_most_four_listings_run_and_a_refresh_drops_the_queue(self):
+        import threading
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"f%d/x.txt" % n: OLD for n in range(6)})
+            gate, lock = threading.Event(), threading.Lock()
+            state = {"now": 0, "peak": 0, "calls": 0}
+            results = {}
+
+            def fake(path, *a):
+                with lock:
+                    state["now"] += 1
+                    state["calls"] += 1
+                    state["peak"] = max(state["peak"], state["now"])
+                gate.wait(10)
+                with lock:
+                    state["now"] -= 1
+                return [], ""
+
+            def check(w):
+                folders = [os.path.join(d, "f%d" % n) for n in range(6)]
+                with mock.patch.object(app, "list_folder_files", fake):
+                    for f in folders:
+                        w._load_files(f)
+
+                    def later():
+                        results["calls_before"] = state["calls"]
+                        w._refresh_tree()           # new generation: queued work is dropped
+                        gate.set()
+                        w.after(800, end)
+
+                    def end():
+                        results["calls_after"] = state["calls"]
+                        results["peak"] = state["peak"]
+                        self.done = True
+                    w.after(500, later)
+            self.run_case(d, check)
+            self.assertEqual(results["calls_before"], 4)
+            self.assertEqual(results["calls_after"], 4)
+            self.assertEqual(results["peak"], 4)
 
 
 def app_messagebox():
