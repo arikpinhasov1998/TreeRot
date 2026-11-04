@@ -1,0 +1,16 @@
+# Proposes updates for the GitHub Actions and the build tool once a month.
+# New versions must be at least 14 days old before they are proposed.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14

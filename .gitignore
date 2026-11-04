@@ -1,0 +1,13 @@
+build/
+dist/
+*.spec
+__pycache__/
+.venv/
+.venv-build/
+t/
+*.csv
+smoke.*
+folder_report_*.html
+folder_report_*.pdf
+.superpowers/
+.DS_Store
