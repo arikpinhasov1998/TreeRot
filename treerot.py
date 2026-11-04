@@ -1523,8 +1523,9 @@ def run_gui(preload=None, on_ready=None):
                 rows = [{"path": folder, "name": "Files could not be listed", "size": None,
                          "mtime": None, "created": None, "color": GRAY, "reason": err,
                          "iid": FILEERR_IID + folder}]
-            rows = sort_file_rows(filter_file_rows(rows, self.filter_var.get()),
-                                  self.sort_var.get())
+            else:                 # the color filter applies to real listings only
+                rows = sort_file_rows(filter_file_rows(rows, self.filter_var.get()),
+                                      self.sort_var.get())
             self.file_cache[folder] = (rows, 0)
             self._show_file_page(folder)
 

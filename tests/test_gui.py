@@ -313,6 +313,26 @@ class FilesInTree(GuiCase):
             self.assertIn("boom", results["status"])
             self.assertTrue(results["rescheduled"])
 
+    def test_listing_error_row_is_shown_under_a_color_filter(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"gone/one.txt": OLD})
+            gone = os.path.join(d, "gone")
+            results = {}
+
+            def check(w):
+                w._populate(gone)
+                shutil.rmtree(gone)
+                w.filter_var.set("Red only (not used)")
+                w._load_files(gone)
+
+                def loaded():
+                    results["kids"] = [k for k in w.tree.get_children(gone)
+                                       if k.startswith(app.FILEERR_IID)]
+                self.wait_files(w, gone, loaded)
+            self.run_case(d, check)
+            self.assertEqual(len(results["kids"]), 1)
+
 
 def app_messagebox():
     from tkinter import messagebox
