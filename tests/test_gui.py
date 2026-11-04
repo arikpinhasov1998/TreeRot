@@ -548,6 +548,76 @@ class FilesInTree(GuiCase):
         self.assertEqual(len(t["reasons"]), 5)               # 4 timeouts + the refused one
         self.assertNotIn("ok", t["calls"])
 
+    def test_a_failure_finishing_the_scan_cannot_leave_scan_disabled(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD})
+            results = {}
+
+            def check(w):
+                def broken():
+                    raise RuntimeError("tree exploded")
+                w._refresh_tree = broken
+                w.scan_btn.config(state="disabled")
+                w.cancel_btn.config(state="normal")
+                w.q.put(("done", w.rows, "since x", False, 0))
+                with mock.patch.object(app_messagebox(), "showerror") as err, \
+                        mock.patch.object(app.traceback, "print_exc") as tb:
+                    w._poll()
+                results["scan"] = str(w.scan_btn.cget("state"))
+                results["cancel"] = str(w.cancel_btn.cget("state"))
+                results["export"] = str(w.export_btn.cget("state"))
+                results["dialog"] = err.called and "tree exploded" in str(err.call_args)
+                results["logged"] = tb.called
+                self.done = True
+            self.run_case(d, check)
+            self.assertEqual(results["scan"], "normal")
+            self.assertEqual(results["cancel"], "disabled")
+            self.assertEqual(results["export"], "normal")
+            self.assertTrue(results["dialog"])
+            self.assertTrue(results["logged"])
+
+    def test_a_failure_midway_through_a_page_leaves_usable_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"big/f%02d.txt" % n: OLD for n in range(10)})
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                real_insert = w.tree.insert
+                count = [0]
+
+                def flaky(parent, index, **kw):
+                    if kw.get("iid", "").startswith(app.FILE_IID):
+                        count[0] += 1
+                        if count[0] == 4:
+                            raise RuntimeError("insert failed")
+                    return real_insert(parent, index, **kw)
+                w.tree.insert = flaky
+                w.tree.selection_set(app.MORE_IID + big)
+                w.tree.focus(app.MORE_IID + big)
+                w._load_files(big)
+
+                def loaded():
+                    kids = w.tree.get_children(big)
+                    results["files"] = [k for k in kids if k.startswith(app.FILE_IID)]
+                    results["err"] = [k for k in kids if k.startswith(app.FILEERR_IID)]
+                    results["more"] = w.tree.exists(app.MORE_IID + big)
+                    results["sel"] = w.tree.selection()
+                    results["focus"] = w.tree.focus()
+                    w.tree.insert = real_insert
+                    w._activate_more(app.MORE_IID + big)         # the rest can still be fetched
+                    results["after_retry"] = len([k for k in w.tree.get_children(big)
+                                                  if k.startswith(app.FILE_IID)])
+                self.wait_files(w, big, loaded)
+            self.run_case(d, check)
+            self.assertEqual(len(results["files"]), 3)
+            self.assertEqual(len(results["err"]), 1)
+            self.assertTrue(results["more"])
+            self.assertEqual(results["sel"], (results["files"][0],))
+            self.assertEqual(results["focus"], results["files"][0])
+            self.assertEqual(results["after_retry"], 10)
+
 
 def app_messagebox():
     from tkinter import messagebox

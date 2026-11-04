@@ -50,6 +50,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta
 
 # --------------------------------------------------------------------------
@@ -1361,6 +1362,7 @@ def run_gui(preload=None, on_ready=None):
                     try:
                         self._handle_msg(msg)
                     except Exception as e:      # one bad message must not stop the polling
+                        traceback.print_exc()
                         try:
                             self.status_var.set(f"Unexpected error: {e}")
                         except Exception:
@@ -1390,40 +1392,47 @@ def run_gui(preload=None, on_ready=None):
                     ("Counting: " if p["phase"] == "count" else "Scanning: ") + cur)
             elif msg[0] == "done":
                 _, rows, cutoff, canceled, n_excl = msg
-                self.scan_elapsed = time.monotonic() - self.t0
-                self.n_excluded = n_excl
-                self.prog_bar.stop()
-                self.prog_bar.config(mode="determinate",
-                                     value=self.prog_bar["value"] if canceled else 100)
-                self.prog_pct_var.set("canceled" if canceled else "100%")
-                last = (self.meter.last if self.meter else None) or {}
-                self.prog_var.set(
-                    f"{'Canceled' if canceled else 'Finished'} in "
-                    f"{fmt_duration(self.scan_elapsed)}  \u00b7  "
-                    f"{last.get('folders', 0):,} folders  \u00b7  "
-                    f"{last.get('files', 0):,} files  \u00b7  "
-                    f"{fmt_size(last.get('bytes', 0))} read")
-                self._load_rows(rows)
-                if rows and not canceled:
-                    remember_totals(self.settings, self._totals_key, len(rows),
-                                    self.by_path[self.root_path]["info"].total_files)
-                    self._save_settings()
-                self.cutoff = cutoff
-                self.scan_btn.config(state="normal")
-                self.cancel_btn.config(state="disabled")
-                self.export_btn.config(state="normal" if rows else "disabled")
-                self.report_btn.config(state="normal" if rows else "disabled")
-                self.scan_meta.update(elapsed=self.scan_elapsed, canceled=bool(canceled),
-                                      excluded_count=n_excl)
-                self._refresh_tree()
-                el = time.monotonic() - self.t0
-                tag = "CANCELED (partial results). " if canceled else "Done. "
-                n_bad = sum(1 for r in rows if r["info"].unreadable)
-                bad = (f" | {n_bad:,} folder(s) could NOT be opened (see gray rows)"
-                       if n_bad else "")
-                self.status_var.set(
-                    f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
-                    f"{n_excl:,} folder(s) excluded | period: {cutoff}")
+                try:
+                    self.scan_elapsed = time.monotonic() - self.t0
+                    self.n_excluded = n_excl
+                    self.prog_bar.stop()
+                    self.prog_bar.config(mode="determinate",
+                                         value=self.prog_bar["value"] if canceled else 100)
+                    self.prog_pct_var.set("canceled" if canceled else "100%")
+                    last = (self.meter.last if self.meter else None) or {}
+                    self.prog_var.set(
+                        f"{'Canceled' if canceled else 'Finished'} in "
+                        f"{fmt_duration(self.scan_elapsed)}  \u00b7  "
+                        f"{last.get('folders', 0):,} folders  \u00b7  "
+                        f"{last.get('files', 0):,} files  \u00b7  "
+                        f"{fmt_size(last.get('bytes', 0))} read")
+                    self._load_rows(rows)
+                    if rows and not canceled:
+                        remember_totals(self.settings, self._totals_key, len(rows),
+                                        self.by_path[self.root_path]["info"].total_files)
+                        self._save_settings()
+                    self.cutoff = cutoff
+                    self.scan_meta.update(elapsed=self.scan_elapsed, canceled=bool(canceled),
+                                          excluded_count=n_excl)
+                    self._refresh_tree()
+                    el = time.monotonic() - self.t0
+                    tag = "CANCELED (partial results). " if canceled else "Done. "
+                    n_bad = sum(1 for r in rows if r["info"].unreadable)
+                    bad = (f" | {n_bad:,} folder(s) could NOT be opened (see gray rows)"
+                           if n_bad else "")
+                    self.status_var.set(
+                        f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
+                        f"{n_excl:,} folder(s) excluded | period: {cutoff}")
+                except Exception as e:
+                    traceback.print_exc()
+                    messagebox.showerror("Scan finished with an error",
+                                         f"The scan completed but showing the results failed: {e}")
+                finally:             # whatever failed above, the user can scan again
+                    self.scan_btn.config(state="normal")
+                    self.cancel_btn.config(state="disabled")
+                    self.export_btn.config(state="normal" if rows else "disabled")
+                    self.report_btn.config(state="normal" if rows else "disabled")
+
             elif msg[0] == "files":
                 self._files_loaded(*msg[1:])
             elif msg[0] == "report_done":
@@ -1595,25 +1604,44 @@ def run_gui(preload=None, on_ready=None):
             had_focus = more in self.tree.selection() or self.tree.focus() == more
             if self.tree.exists(more):
                 self.tree.delete(more)
-            first_new = None
-            for f in rows[shown:shown + FILE_PAGE]:
-                iid = f.get("iid") or FILE_IID + f["path"]
-                first_new = first_new or iid
-                self.file_rows[iid] = f
-                self.tree.insert(folder, "end", iid=iid, text=f["name"], tags=(f["color"],),
-                                 values=(fmt_ts(_file_activity(f) or None), "",
-                                         "", "1" if f["color"] == GREEN else "",
-                                         "" if f["size"] is None else fmt_size(f["size"]), ""))
-            shown = min(shown + FILE_PAGE, len(rows))
+            first_new, inserted, failure = None, 0, None
+            try:
+                for f in rows[shown:shown + FILE_PAGE]:
+                    iid = f.get("iid") or FILE_IID + f["path"]
+                    self.file_rows[iid] = f
+                    self.tree.insert(folder, "end", iid=iid, text=f["name"], tags=(f["color"],),
+                                     values=(fmt_ts(_file_activity(f) or None), "",
+                                             "", "1" if f["color"] == GREEN else "",
+                                             "" if f["size"] is None else fmt_size(f["size"]),
+                                             ""))
+                    first_new = first_new or iid
+                    inserted += 1
+            except Exception as e:      # leave rows the user can still work with
+                traceback.print_exc()
+                failure = e
+            shown += inserted
             self.file_cache[folder] = (rows, shown)
-            if shown < len(rows):
-                self.tree.insert(folder, "end", iid=more,
-                                 text=f"Show more ({len(rows) - shown:,} left)...")
-            if had_focus:         # the row the user was on is gone: keep the keyboard usable
-                target = first_new or folder
-                self.tree.focus(target)
-                self.tree.selection_set(target)
-                self.tree.see(target)
+            try:
+                if failure is not None:
+                    err = FILEERR_IID + folder
+                    if not self.tree.exists(err):
+                        self.file_rows[err] = {
+                            "path": folder, "name": "Some files could not be shown", "size": None,
+                            "mtime": None, "created": None, "color": GRAY,
+                            "reason": f"The window could not show all the files: {failure}"}
+                        self.tree.insert(folder, "end", iid=err, text="Some files could not be shown",
+                                         tags=(GRAY,))
+                    first_new = first_new or err
+                if shown < len(rows):
+                    self.tree.insert(folder, "end", iid=more,
+                                     text=f"Show more ({len(rows) - shown:,} left)...")
+                if had_focus:     # the row the user was on is gone: keep the keyboard usable
+                    target = first_new or folder
+                    self.tree.focus(target)
+                    self.tree.selection_set(target)
+                    self.tree.see(target)
+            except Exception:
+                traceback.print_exc()
 
         def _path_of(self, iid):
             if iid in self.file_rows:
