@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="TreeRot logo">
+  <rect width="100" height="100" rx="20" fill="#f4f1e8"/>
+  <path d="M50 10C20 28 16 62 50 88Z" fill="#2f9e55"/>
+  <path d="M50 10C80 28 84 62 50 88Z" fill="#d6423a"/>
+  <path d="M50 10V94" fill="none" stroke="#3a2a1c" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="64" cy="38" r="5" fill="#f4f1e8"/>
+  <circle cx="62" cy="58" r="3.5" fill="#f4f1e8"/>
+  <circle cx="72" cy="52" r="2.5" fill="#f4f1e8"/>
+</svg>

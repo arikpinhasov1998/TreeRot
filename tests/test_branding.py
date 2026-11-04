@@ -23,6 +23,9 @@ class Branding(unittest.TestCase):
         self.assertIn("All rights reserved", text)
         self.assertIn("Arik Pinhasov", text)
 
+    def test_report_data_carries_logo(self):
+        self.assertTrue(app.ICON_PNG_B64.startswith("iVBOR"))
+
 
 class Migration(unittest.TestCase):
     def test_old_settings_read_once_and_old_file_kept(self):

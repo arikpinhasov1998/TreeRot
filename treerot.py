@@ -125,6 +125,7 @@ COMMON_EXCLUDES = [
 APP_NAME = "TreeRot"
 CREDIT = "Created by Arik Pinhasov"
 CREDIT_URL = "https://github.com/arikpinhasov1998"
+ICON_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAADAUlEQVR42u2bv2sUQRTH5w+5v8DGYHVcGWwsLNfCKhAEsRJyYmMdq8NCsAhioaIQJEiKSOwUOSVY+gPBBDlBJSAo2I/7XXLLMuyPmb33Yza3Bw+OC2Hv+7l5896bN8+Yhte/v7+GqU1Sm6ZmO2LTk+88NG1f6T8nqc06JLrKoCEJET5IbfsUCHcNmgY+4menUHxxNQyWVXw9BI1lv37pQmYa7lC24Yl+ib2dx3Z0ZpAZ3itASIoARJf+0c/Pdnx3IwfwbHzN/jn8IO4KxTgv9uB3R2/t+adX7LmbqzmAh6MV+yW5aH8fvJKGMDQnCYPIA++/f2LPPkgycwF8Wh1l9uPRliSAiZHK8K7vb+bi6wDAvt0ai2WMRkN8EwBJCEZDvA8AKQhGQ7wvAAkIbAA2X9+rFB8CAPb9zu1uAdj9+KJWfCgA2PHeTjcAIMlBnKcGgDyBI1kykn6/CACu/cBQZ3k+4tsCgFFni6QALj+/wQ7g69W1OAGE/PqLAKBeBUba90MAoC7AxgdDKOTYC8gAhIj3AVAW9gBk/veoAPjE/RAACHlVz6LOC4zG8l+kGqR2AxIAPolPqAuUPQd7gc8qEQcQKr5tOYzPmiCJAwgNfyFRADEfuz8MvzhHODQaG+CieQDlRtgD6AF0EAD2BthSAoiuGMIBiCQA6r5BtHlA3ckQwh9VRWikzwF8AcwFIvtzEyBKVzASJ8ChANxTYMDgOimOshp0/bxYA0RZDbYpiJrK4eIJsOsCVIUQKYBQN2jaAyASwuHrnI0SQ9kPkEqEKPsD/alw3xfoO0P0vUEuAJ3oDbp3gagAcN0dYrsf0OQKIQA4L0mwAWhqk/sC4GqLi1yRqYsKvgC47w6yX5KqqhN8AHDdChEFUAWhTW+wswDKINQBkBIvCsCFUAVAUvwcwFQDQhkAafHzq7IT4YdmEFwACuLzy9JDhQfHMDBh87E6jVmhCADM+pEZzaEpZQDb6mNzigDimB08ePMyB4D36uI1RmchXFB88+hsPzy9hOPz/wGvgFbabsQh1AAAAABJRU5ErkJggg=='
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".treerot.json")
 OLD_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
@@ -784,6 +785,10 @@ def run_gui(preload=None):
         def __init__(self):
             super().__init__()
             self.title(f"{APP_NAME} {__version__}")
+            try:                                   # Tk before 8.6 cannot read PNG; the window then has no icon
+                self.iconphoto(True, tk.PhotoImage(data=ICON_PNG_B64))
+            except tk.TclError:
+                pass
             self.geometry("1250x720")
             self.minsize(950, 480)
 
@@ -1829,6 +1834,7 @@ def report_data(rows, meta, folder_basis=False):
         "activity": root.get("activity", "modified"), "folder_basis": folder_basis,
         "meta": {k: v for k, v in meta.items()},
         "version": __version__,
+        "icon": ICON_PNG_B64,
     }
 
 
@@ -2294,6 +2300,12 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   /* ---------- header + overview ---------- */
   var total = S.total, C = S.colors;
   document.getElementById("root-path").textContent = M.root;
+  /* set after the h1 text above: assigning textContent would remove the logo */
+  var logo = document.createElement("img");
+  logo.src = "data:image/png;base64," + D.icon;
+  logo.alt = "TreeRot logo";
+  logo.width = 40; logo.height = 40;
+  document.querySelector("h1").prepend(logo);
   document.getElementById("period").textContent = "Activity period: " + D.period;
   document.getElementById("generated").textContent = "Scanned " + M.scanned_at;
   document.getElementById("finding").textContent = total === 0
