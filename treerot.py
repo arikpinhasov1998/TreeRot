@@ -888,6 +888,8 @@ def run_gui(preload=None, on_ready=None):
             self.matching = []
             self.q = queue.Queue()
             self.cancel_event = threading.Event()
+            self.report_cancel = threading.Event()   # a PDF export has its own flag
+            self._report_thread = None
             self.period_text = ""
             self.file_rows = {}       # tree iid -> file row
             self.file_cache = {}      # folder path -> (sorted and filtered rows, number shown)
@@ -1241,7 +1243,15 @@ def run_gui(preload=None, on_ready=None):
             })
             save_settings(self.settings)
 
+        def _end_report(self):
+            """Stops a running PDF export and waits until its browser and temp folder are gone."""
+            self.report_cancel.set()
+            t = self._report_thread
+            if t is not None and t.is_alive() and t is not threading.current_thread():
+                t.join(30)
+
         def destroy(self):
+            self._end_report()           # the browser must not outlive the window
             try:                         # no stray callback may fire into a dead interpreter
                 self.after_cancel(self._poll_job)
             except (tk.TclError, AttributeError):
@@ -1290,6 +1300,10 @@ def run_gui(preload=None, on_ready=None):
             lo = d_from.timestamp() if d_from else None
             hi = d_to.timestamp() if d_to else None
 
+            if self._report_thread is not None and self._report_thread.is_alive():
+                messagebox.showinfo("Report in progress",
+                                    "Wait for the report to finish, or cancel it, before scanning.")
+                return
             self.cancel_event.clear()
             self.rows = []
             self.tree.delete(*self.tree.get_children())
@@ -1355,6 +1369,7 @@ def run_gui(preload=None, on_ready=None):
 
         def _cancel(self):
             self.cancel_event.set()
+            self.report_cancel.set()
             self.status_var.set("Canceling...")
 
         def _poll(self):
@@ -1440,6 +1455,10 @@ def run_gui(preload=None, on_ready=None):
 
             elif msg[0] == "files":
                 self._files_loaded(*msg[1:])
+            elif msg[0] == "report_canceled":
+                self.cancel_btn.config(state="disabled")
+                self.report_btn.config(state="normal" if self.rows else "disabled")
+                self.status_var.set("The PDF was canceled.")
             elif msg[0] == "report_done":
                 self._report_done(msg[1], msg[2])
             elif msg[0] == "error":
@@ -2094,17 +2113,27 @@ def run_gui(preload=None, on_ready=None):
             meta["basis_note"] = basis_note(self._folder_basis(), meta["activity"])
             rows, basis = self.rows, self._folder_basis()
             self.report_btn.config(state="disabled")
+            self.report_cancel.clear()
+            if fmt == "pdf":
+                self.cancel_btn.config(state="normal")
             self.status_var.set("Creating the PDF report..." if fmt == "pdf" else "Saving the report...")
+            cancel = self.report_cancel
 
             def work():
                 try:
-                    write_report(fn, rows, meta, basis, pdf_tree, browser)
+                    # None, not the dialog's browser: naming one browser would turn off the
+                    # fallback. The dialog uses find_browser() only to decide if PDF is offered.
+                    write_report(fn, rows, meta, basis, pdf_tree, None, cancel)
                     self.q.put(("report_done", fn, None))
+                except ReportCanceled:
+                    self.q.put(("report_canceled",))
                 except (ReportError, OSError) as e:
                     self.q.put(("report_done", fn, str(e)))
-            threading.Thread(target=work, daemon=True).start()
+            self._report_thread = threading.Thread(target=work, daemon=True)
+            self._report_thread.start()
 
         def _report_done(self, fn, err):
+            self.cancel_btn.config(state="disabled")
             self.report_btn.config(state="normal" if self.rows else "disabled")
             if err:
                 self.status_var.set("The report was not saved.")
