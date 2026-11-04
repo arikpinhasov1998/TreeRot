@@ -35,9 +35,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          v=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('folder_activity_scanner.py', encoding='utf-8').read()).group(1))")
+          v=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('treerot.py', encoding='utf-8').read()).group(1))")
           if [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ = $v in folder_activity_scanner.py"
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ = $v in treerot.py"
             exit 1
           fi
 
@@ -67,13 +67,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & dist\release\FolderActivityScanner-cli.exe . --format summary --report smoke.html
+          & dist\release\TreeRot-cli.exe . --format summary --report smoke.html
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path smoke.html)) { throw "Command-line test failed" }
           # the windowed exe must still accept the older --cli form
-          $p = Start-Process dist\release\FolderActivityScanner.exe -ArgumentList '--cli', '.', '-o', 'smoke.csv' -Wait -PassThru
+          $p = Start-Process dist\release\TreeRot.exe -ArgumentList '--cli', '.', '-o', 'smoke.csv' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.csv)) { throw "--cli test failed" }
           # the window must open and stay open
-          $g = Start-Process dist\release\FolderActivityScanner.exe -PassThru
+          $g = Start-Process dist\release\TreeRot.exe -PassThru
           Start-Sleep -Seconds 8
           if ($g.HasExited) { throw "The window closed by itself (exit code $($g.ExitCode))" }
           Stop-Process -Id $g.Id -Force
@@ -83,10 +83,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -eu
-          mkdir t && tar -xzf dist/release/folder-activity-scanner-linux-x86_64.tar.gz -C t
-          ./t/folder-activity-scanner . --format summary --report smoke.html
+          mkdir t && tar -xzf dist/release/treerot-linux-x86_64.tar.gz -C t
+          ./t/treerot . --format summary --report smoke.html
           test -s smoke.html
-          rc=0; timeout 8 xvfb-run -a ./t/folder-activity-scanner || rc=$?
+          rc=0; timeout 8 xvfb-run -a ./t/treerot || rc=$?
           if [ "$rc" -ne 124 ]; then echo "::error::The window did not stay open (exit $rc)"; exit 1; fi
           echo "Linux tests OK"
 
@@ -94,18 +94,18 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -eu
-          zip=$(ls dist/release/FolderActivityScanner-macos-*.zip)
+          zip=$(ls dist/release/TreeRot-macos-*.zip)
           mkdir t && ditto -x -k "$zip" t
-          ./t/FolderActivityScanner/folder-activity-scanner . --format summary --report smoke.html
+          ./t/TreeRot/treerot . --format summary --report smoke.html
           test -s smoke.html
-          file t/FolderActivityScanner/folder-activity-scanner
+          file t/TreeRot/treerot
           echo "macOS command-line test OK"
 
       - name: Test the macOS window (informational)
         if: runner.os == 'macOS'
         continue-on-error: true
         run: |
-          ./t/FolderActivityScanner/FolderActivityScanner.app/Contents/MacOS/FolderActivityScanner &
+          ./t/TreeRot/TreeRot.app/Contents/MacOS/TreeRot &
           pid=$!; sleep 8
           if kill -0 "$pid" 2>/dev/null; then kill "$pid"; echo "macOS window test OK"; else echo "::warning::The app closed by itself"; exit 1; fi
 
@@ -114,9 +114,9 @@ jobs:
         shell: bash
         run: |
           case "$RUNNER_OS" in
-            Windows) exe=dist/release/FolderActivityScanner-cli.exe ;;
-            Linux)   exe=./t/folder-activity-scanner ;;
-            macOS)   exe=./t/FolderActivityScanner/folder-activity-scanner ;;
+            Windows) exe=dist/release/TreeRot-cli.exe ;;
+            Linux)   exe=./t/treerot ;;
+            macOS)   exe=./t/TreeRot/treerot ;;
           esac
           "$exe" . --format summary --report smoke.pdf
           head -c 5 smoke.pdf | grep -q '%PDF-' && echo "PDF report OK ($(wc -c < smoke.pdf) bytes)"
@@ -136,7 +136,7 @@ jobs:
                       f.write("x")
           PY
           start=$(date +%s)
-          dist/release/FolderActivityScanner-cli.exe big --format summary --report big.pdf --report-tree all
+          dist/release/TreeRot-cli.exe big --format summary --report big.pdf --report-tree all
           head -c 5 big.pdf | grep -q '%PDF-'
           echo "Large PDF OK: $(wc -c < big.pdf) bytes in $(( $(date +%s) - start )) s"
 

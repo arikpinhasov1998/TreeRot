@@ -1,7 +1,7 @@
 @echo off
 REM Builds the Windows programs into dist\release\
-REM   FolderActivityScanner.exe      - opens the window
-REM   FolderActivityScanner-cli.exe  - for the command prompt, scripts and Task Scheduler
+REM   TreeRot.exe      - opens the window
+REM   TreeRot-cli.exe  - for the command prompt, scripts and Task Scheduler
 setlocal
 cd /d "%~dp0"
 
@@ -24,23 +24,23 @@ echo === Installing the build tool ===
 set "ICON="
 if exist app.ico set "ICON=--icon app.ico"
 
-echo === Building FolderActivityScanner.exe (window) ===
+echo === Building TreeRot.exe (window) ===
 "%VPY%" -m PyInstaller --noconfirm --clean --onefile --windowed %ICON% ^
-  --name FolderActivityScanner folder_activity_scanner.py || goto :error
+  --name TreeRot treerot.py || goto :error
 
-echo === Building FolderActivityScanner-cli.exe (command line) ===
+echo === Building TreeRot-cli.exe (command line) ===
 "%VPY%" -m PyInstaller --noconfirm --onefile --console %ICON% ^
-  --name FolderActivityScanner-cli folder_activity_scanner.py || goto :error
+  --name TreeRot-cli treerot.py || goto :error
 
 if exist dist\release rmdir /s /q dist\release
 mkdir dist\release || goto :error
-copy /y dist\FolderActivityScanner.exe dist\release\ >nul || goto :error
-copy /y dist\FolderActivityScanner-cli.exe dist\release\ >nul || goto :error
+copy /y dist\TreeRot.exe dist\release\ >nul || goto :error
+copy /y dist\TreeRot-cli.exe dist\release\ >nul || goto :error
 
 echo.
 echo Done:
-echo   dist\release\FolderActivityScanner.exe
-echo   dist\release\FolderActivityScanner-cli.exe
+echo   dist\release\TreeRot.exe
+echo   dist\release\TreeRot-cli.exe
 goto :eof
 
 :error

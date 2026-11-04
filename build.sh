@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Linux or macOS program into dist/release/
-#   Linux:  folder-activity-scanner-linux-<arch>.tar.gz   (one program: window and command line)
-#   macOS:  FolderActivityScanner-macos-<arch>.zip        (FolderActivityScanner.app + command line)
+#   Linux:  treerot-linux-<arch>.tar.gz   (one program: window and command line)
+#   macOS:  TreeRot-macos-<arch>.zip        (TreeRot.app + command line)
 # On Windows use build_exe.bat instead.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,26 +30,26 @@ mkdir -p dist/release
 case "$(uname -s)" in
   Linux)
     "$VPY" -m PyInstaller --noconfirm --clean --onefile \
-      --name folder-activity-scanner folder_activity_scanner.py
+      --name treerot treerot.py
     # a .tar.gz keeps the "executable" permission, a plain download would lose it
-    tar -czf "dist/release/folder-activity-scanner-linux-$ARCH.tar.gz" -C dist folder-activity-scanner
+    tar -czf "dist/release/treerot-linux-$ARCH.tar.gz" -C dist treerot
     ;;
   Darwin)
     ICON_ARGS=""
     if [ -f app.icns ]; then ICON_ARGS="--icon app.icns"; fi
     # shellcheck disable=SC2086
     "$VPY" -m PyInstaller --noconfirm --clean --windowed --onedir $ICON_ARGS \
-      --name FolderActivityScanner --osx-bundle-identifier io.github.folderactivityscanner \
-      folder_activity_scanner.py
+      --name TreeRot --osx-bundle-identifier io.github.arikpinhasov1998.treerot \
+      treerot.py
     "$VPY" -m PyInstaller --noconfirm --onefile \
-      --name folder-activity-scanner folder_activity_scanner.py
+      --name treerot treerot.py
     rm -rf dist/pkg
-    mkdir -p dist/pkg/FolderActivityScanner
-    ditto dist/FolderActivityScanner.app dist/pkg/FolderActivityScanner/FolderActivityScanner.app
-    cp dist/folder-activity-scanner dist/pkg/FolderActivityScanner/
+    mkdir -p dist/pkg/TreeRot
+    ditto dist/TreeRot.app dist/pkg/TreeRot/TreeRot.app
+    cp dist/treerot dist/pkg/TreeRot/
     # ditto keeps the app bundle intact (a plain zip can break it)
-    ditto -c -k --keepParent dist/pkg/FolderActivityScanner \
-      "dist/release/FolderActivityScanner-macos-$ARCH.zip"
+    ditto -c -k --keepParent dist/pkg/TreeRot \
+      "dist/release/TreeRot-macos-$ARCH.zip"
     ;;
   *)
     echo "Unsupported system: $(uname -s). On Windows run build_exe.bat."

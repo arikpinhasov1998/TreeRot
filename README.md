@@ -1,4 +1,6 @@
-# Folder Activity Scanner
+# TreeRot
+
+Created by [Arik Pinhasov](https://github.com/arikpinhasov1998).
 
 Scans a folder or network share and shows a TreeSize-style tree where every folder is
 **green** (used in the period you choose), **red** (not used) or **gray** (empty or unreadable).
@@ -16,11 +18,11 @@ Go to the [**Releases**](../../releases/latest) page and download the file for y
 
 | System | Download | What you get |
 |---|---|---|
-| Windows 10 / 11 | `FolderActivityScanner.exe` | The window. Double-click to start. |
-| | `FolderActivityScanner-cli.exe` | The command line, for scripts and Task Scheduler. |
-| Linux (x86-64) | `folder-activity-scanner-linux-x86_64.tar.gz` | One program for both the window and the command line. |
-| macOS, Apple Silicon (M1 and later) | `FolderActivityScanner-macos-arm64.zip` | `FolderActivityScanner.app` and the command-line program `folder-activity-scanner`. |
-| macOS, Intel | `FolderActivityScanner-macos-x86_64.zip` | The same, for Intel Macs. |
+| Windows 10 / 11 | `TreeRot.exe` | The window. Double-click to start. |
+| | `TreeRot-cli.exe` | The command line, for scripts and Task Scheduler. |
+| Linux (x86-64) | `treerot-linux-x86_64.tar.gz` | One program for both the window and the command line. |
+| macOS, Apple Silicon (M1 and later) | `TreeRot-macos-arm64.zip` | `TreeRot.app` and the command-line program `treerot`. |
+| macOS, Intel | `TreeRot-macos-x86_64.zip` | The same, for Intel Macs. |
 
 Nothing is installed. To check that a download is genuine, compare its SHA-256 hash with
 `SHA256SUMS.txt` from the same release (`certutil -hashfile FILE SHA256` on Windows,
@@ -33,14 +35,14 @@ The programs are not code-signed, so each system warns the first time:
 * **Windows:** "Windows protected your PC" - click **More info**, then **Run anyway**.
 * **macOS:** "cannot be opened because Apple cannot check it" - open **System Settings >
   Privacy & Security**, scroll down and click **Open Anyway** next to the app's name. Or, in
-  Terminal: `xattr -dr com.apple.quarantine FolderActivityScanner.app`.
+  Terminal: `xattr -dr com.apple.quarantine TreeRot.app`.
   To scan a network share, also allow the app under **Privacy & Security > Files and Folders >
   Network Volumes**; without it every folder on the share shows as unreadable (gray).
 * **Linux:** unpack and run:
   ```
-  tar -xzf folder-activity-scanner-linux-x86_64.tar.gz
-  ./folder-activity-scanner              # window (needs a desktop)
-  ./folder-activity-scanner /srv/share   # command line
+  tar -xzf treerot-linux-x86_64.tar.gz
+  ./treerot              # window (needs a desktop)
+  ./treerot /srv/share   # command line
   ```
   The program needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+). On older
   systems run the Python file instead (see *Run from source*).
@@ -61,7 +63,7 @@ The programs are not code-signed, so each system warns the first time:
   the tree to print, because it cannot expand folders: **up to N levels**, **all levels
   (unlimited)**, or **the path to every unused folder**. The dialog shows how many folders and
   roughly how many pages that gives before you save.
-* Settings (last path, exclusions, last scan totals) are saved in `.folder_activity_scanner.json`
+* Settings (last path, exclusions, last scan totals) are saved in `.treerot.json`
   in your home folder.
 
 ## Command line
@@ -69,9 +71,9 @@ The programs are not code-signed, so each system warns the first time:
 Give a path and the window does not open, so it works over SSH, in cron and in Task Scheduler:
 
 ```
-FolderActivityScanner-cli.exe "\\server\share" --from 2024-10-28 --format summary --report share.html
-./folder-activity-scanner /srv/share --from 2024-10-28 --format summary --report share.pdf
-./folder-activity-scanner /srv/share --format csv -o share.csv --progress lines 2>> scan.log
+TreeRot-cli.exe "\\server\share" --from 2024-10-28 --format summary --report share.html
+./treerot /srv/share --from 2024-10-28 --format summary --report share.pdf
+./treerot /srv/share --format csv -o share.csv --progress lines 2>> scan.log
 ```
 
 Useful options: `--to DATE`, `--exclude NAME_OR_PATH` (repeatable), `--exclude-common`,
@@ -87,8 +89,8 @@ drives do not exist when a task runs on its own.
 Requires Python 3.8 or newer and nothing else (standard library only):
 
 ```
-python folder_activity_scanner.py                 # window
-python folder_activity_scanner.py /srv/share      # command line
+python treerot.py                 # window
+python treerot.py /srv/share      # command line
 ```
 
 The window needs Python's tkinter: on Linux `sudo apt install python3-tk`; on macOS use Python
@@ -100,9 +102,9 @@ Each system can only build its own programs, so build on the system you want to 
 
 | System | Command | Result in `dist/release/` |
 |---|---|---|
-| Windows | `build_exe.bat` | `FolderActivityScanner.exe`, `FolderActivityScanner-cli.exe` |
-| Linux | `bash build.sh` | `folder-activity-scanner-linux-<arch>.tar.gz` |
-| macOS | `bash build.sh` | `FolderActivityScanner-macos-<arch>.zip` |
+| Windows | `build_exe.bat` | `TreeRot.exe`, `TreeRot-cli.exe` |
+| Linux | `bash build.sh` | `treerot-linux-<arch>.tar.gz` |
+| macOS | `bash build.sh` | `TreeRot-macos-<arch>.zip` |
 
 The scripts create a private build environment in `.venv-build` and install the pinned build tool
 (PyInstaller) there. Put an `app.ico` (Windows) or `app.icns` (macOS) next to the scripts to give the
@@ -112,7 +114,7 @@ programs an icon.
 
 GitHub builds every version for you (see `.github/workflows/release.yml`):
 
-1. Change `__version__` in `folder_activity_scanner.py`, commit and push.
+1. Change `__version__` in `treerot.py`, commit and push.
 2. Tag the same version and push the tag:
    ```
    git tag v1.1.1

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Folder Activity Scanner  (TreeSize-style tree view)
----------------------------------------------------
+TreeRot - find the rot in your folder tree
+------------------------------------------
+Created by Arik Pinhasov, https://github.com/arikpinhasov1998
 Scans a folder tree (local disk, mounted/UNC network share, NAS) and shows an
 expandable tree where every folder is colored:
 
@@ -14,17 +15,17 @@ expandable tree where every folder is colored:
 macOS; Linux does not expose it (see --created). Alternatively the GUI can color by the
 folder's own timestamp only.
 
-Open the GUI:    python folder_activity_scanner.py
-Run headless:    python folder_activity_scanner.py PATH [options]
+Open the GUI:    python treerot.py
+Run headless:    python treerot.py PATH [options]
                  (no display and no tkinter needed - for servers, SSH, cron, Task Scheduler)
 
 Headless examples:
-    python folder_activity_scanner.py /srv/share --from 2024-10-28 --format tree --depth 3
-    python folder_activity_scanner.py /srv/share --years 2 --show red -o unused.csv
-    python folder_activity_scanner.py "\\\\server\\share" --exclude-common --format summary
-    python folder_activity_scanner.py /srv/share --precount --progress lines -o report.csv
-    python folder_activity_scanner.py /srv/share --format summary --report share_report.html
-    python folder_activity_scanner.py /srv/share --format summary --report share_report.pdf --report-tree 3
+    python treerot.py /srv/share --from 2024-10-28 --format tree --depth 3
+    python treerot.py /srv/share --years 2 --show red -o unused.csv
+    python treerot.py "\\\\server\\share" --exclude-common --format summary
+    python treerot.py /srv/share --precount --progress lines -o report.csv
+    python treerot.py /srv/share --format summary --report share_report.html
+    python treerot.py /srv/share --format summary --report share_report.pdf --report-tree 3
 Run with --help for every option.
 
 Exclusions (skipped entirely - not scanned, not counted) can be:
@@ -57,7 +58,7 @@ from datetime import datetime, timedelta
 
 
 QUOTE = chr(34)                       # the double-quote character, used to trim pasted paths
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 GREEN, RED, GRAY = "green", "red", "gray"
 COLOR_LABEL = {GREEN: "USED in the period", RED: "NOT used in the period",
                GRAY: "EMPTY / ERROR"}
@@ -121,15 +122,25 @@ COMMON_EXCLUDES = [
     "#snapshot", "#recycle", "@Recycle", "@eaDir", ".Trash-*", "lost+found",
 ]
 
-SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
+APP_NAME = "TreeRot"
+CREDIT = "Created by Arik Pinhasov"
+CREDIT_URL = "https://github.com/arikpinhasov1998"
+
+SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".treerot.json")
+OLD_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
 
 
 def load_settings():
-    try:
-        with open(SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    for path, migrating in ((SETTINGS_FILE, False), (OLD_SETTINGS_FILE, True)):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if migrating:
+            save_settings(data)
+        return data
+    return {}
 
 
 def save_settings(data):
@@ -756,7 +767,7 @@ def gui_unavailable(reason):
     sys.stderr.write(
         f"Cannot open the graphical interface: {reason}\n\n"
         "To run without a GUI (servers, SSH, cron), give a folder path, for example:\n"
-        "    python folder_activity_scanner.py /srv/share --format tree\n"
+        "    python treerot.py /srv/share --format tree\n"
         "Run with --help to see all options.\n")
     sys.exit(3)
 
@@ -772,7 +783,7 @@ def run_gui(preload=None):
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title(f"Folder Activity Scanner {__version__}")
+            self.title(f"{APP_NAME} {__version__}")
             self.geometry("1250x720")
             self.minsize(950, 480)
 
@@ -885,6 +896,7 @@ def run_gui(preload=None):
             self.precount_var = tk.BooleanVar(value=bool(self.settings.get("precount", False)))
             ttk.Checkbutton(button_row, text="Count first (exact progress, slower)",
                             variable=self.precount_var).pack(side="left", padx=(14, 0))
+            ttk.Button(button_row, text="About", command=self._about).pack(side="left", padx=(14, 0))
 
             # legend
             leg = ttk.Frame(button_row)
@@ -1681,7 +1693,7 @@ def run_gui(preload=None):
             fn = filedialog.asksaveasfilename(
                 defaultextension=ext,
                 filetypes=[("PDF report", "*.pdf")] if fmt == "pdf" else [("HTML report", "*.html")],
-                initialfile=f"folder_report_{datetime.now():%Y%m%d_%H%M}{ext}")
+                initialfile=f"treerot_report_{datetime.now():%Y%m%d_%H%M}{ext}")
             if not fn:
                 return
             if not fn.lower().endswith(ext):
@@ -1715,6 +1727,13 @@ def run_gui(preload=None):
                 except Exception as e:
                     messagebox.showerror("Cannot open", str(e))
 
+        def _about(self):
+            if messagebox.askyesno(f"About {APP_NAME}",
+                                   f"{APP_NAME} {__version__}\n{CREDIT}\n{CREDIT_URL}\n\n"
+                                   "Open this link in your browser?"):
+                import webbrowser
+                webbrowser.open(CREDIT_URL)
+
         def _export(self):
             rows = self.matching
             if not rows:
@@ -1722,7 +1741,7 @@ def run_gui(preload=None):
                 return
             fn = filedialog.asksaveasfilename(
                 defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-                initialfile=f"folder_activity_{datetime.now():%Y%m%d_%H%M}.csv")
+                initialfile=f"treerot_{datetime.now():%Y%m%d_%H%M}.csv")
             if fn:
                 try:
                     write_csv(fn, rows)
@@ -1838,7 +1857,7 @@ NO_BROWSER_MSG = (
 
 def find_browser(explicit=None):
     """Path of a Chromium-family browser that can print to PDF, or None."""
-    cands = [explicit, os.environ.get("FAS_BROWSER")]
+    cands = [explicit, os.environ.get("TREEROT_BROWSER"), os.environ.get("FAS_BROWSER")]
     if sys.platform == "win32":
         for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
                      os.environ.get("LOCALAPPDATA")):
@@ -1961,7 +1980,7 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
         pdf_opt = {"depth": int(pdf_tree)}
     n_rows = pdf_tree_rows(rows, pdf_tree, folder_basis)
     # work next to the target: some browsers (e.g. Ubuntu's snap Chromium) cannot read /tmp
-    workdir = tempfile.mkdtemp(prefix=".folder_report_",
+    workdir = tempfile.mkdtemp(prefix=".treerot_report_",
                                dir=os.path.dirname(os.path.abspath(path)))
     try:
         tmp_html = os.path.join(workdir, "report.html")
@@ -2568,9 +2587,11 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   }
   detail("Totals", nf(S.folders) + " folders, " + nf(S.files) + " files, " + fmtSize(total));
   if (M.computer) detail("Computer", M.computer);
-  detail("Created by", "Folder Activity Scanner " + D.version);
+  detail("Tool", "TreeRot " + D.version);
+  detail("Credit", "Created by Arik Pinhasov, github.com/arikpinhasov1998");
 })();
 </script>
+<footer style="margin:2rem 0 1rem;font-size:13px">TreeRot. Created by <a href="https://github.com/arikpinhasov1998">Arik Pinhasov</a>.</footer>
 </body>
 </html>
 '''
@@ -2945,22 +2966,22 @@ def _depth_arg(text):
 
 def build_parser():
     ap = argparse.ArgumentParser(
-        prog="folder_activity_scanner.py",
+        prog="treerot",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=("Find which folders are (and are not) in use. With no PATH the graphical "
                      "interface opens. With a PATH it runs headless: no display and no tkinter "
                      "needed, so it works over SSH, in cron and in Task Scheduler."),
         epilog=("examples:\n"
-                "  folder_activity_scanner.py /srv/share --format tree --depth 3\n"
-                "  folder_activity_scanner.py /srv/share --from 2024-10-28 --show red -o unused.csv\n"
-                "  folder_activity_scanner.py \\\\server\\share --exclude-common --format summary\n"
+                "  treerot.py /srv/share --format tree --depth 3\n"
+                "  treerot.py /srv/share --from 2024-10-28 --show red -o unused.csv\n"
+                "  treerot.py \\\\server\\share --exclude-common --format summary\n"
                 "\n"
                 "colors / tags: USED = a file inside changed in the period, UNUSED = none did,\n"
                 "EMPTY / ERROR = no files, or the folder could not be opened.\n"
                 "exit codes: 0 ok, 2 bad arguments or path, 3 GUI unavailable, 130 interrupted.\n"
                 "tip: on Windows do not end a quoted path with a backslash (use \"C:\\Data\", "
                 "not \"C:\\Data\\\")."))
-    ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    ap.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}\n{CREDIT}\n{CREDIT_URL}")
     ap.add_argument("path", nargs="?", metavar="PATH",
                     help="folder or share to scan (runs headless); omit to open the GUI")
     ap.add_argument("--cli", nargs="?", const="", metavar="PATH",
