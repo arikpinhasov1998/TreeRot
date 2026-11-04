@@ -2241,6 +2241,10 @@ class ReportError(Exception):
     pass
 
 
+class ReportCanceled(ReportError):
+    pass
+
+
 NO_BROWSER_MSG = (
     "A PDF report is made by printing the report with Microsoft Edge, Google Chrome or "
     "Chromium, and none of them was found on this computer. Save the report as HTML "
@@ -2248,9 +2252,24 @@ NO_BROWSER_MSG = (
     "to one with --browser PATH.")
 
 
-def find_browser(explicit=None):
-    """Path of a Chromium-family browser that can print to PDF, or None."""
-    cands = [explicit, os.environ.get("TREEROT_BROWSER"), os.environ.get("FAS_BROWSER")]
+def _browser_rank(path):
+    """Edge, then Chrome, then Chromium, then anything else such as Brave."""
+    low = os.path.basename(path).lower()
+    for rank, word in enumerate(("edge", "chrome", "chromium")):
+        if word in low:
+            return rank
+    return 3
+
+
+def find_browsers(explicit=None):
+    """Chromium-family browsers that can print to PDF, best first. An explicit one is the only one."""
+    if explicit:
+        return [explicit] if os.path.isfile(explicit) else []
+    cands = [os.environ.get("TREEROT_BROWSER"), os.environ.get("FAS_BROWSER")]
+    override = [c for c in cands if c and os.path.isfile(c)]
+    if override:
+        return override[:1]
+    cands = []
     if sys.platform == "win32":
         for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
                      os.environ.get("LOCALAPPDATA")):
@@ -2266,42 +2285,107 @@ def find_browser(explicit=None):
     for name in ("msedge", "microsoft-edge", "microsoft-edge-stable", "google-chrome",
                  "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
         cands.append(shutil.which(name))
+    found, seen = [], set()
     for c in cands:
-        if c and os.path.isfile(c):
-            return c
-    return None
+        if c and os.path.isfile(c) and os.path.realpath(c) not in seen:
+            seen.add(os.path.realpath(c))
+            found.append(c)
+    return sorted(found, key=_browser_rank)
 
 
-def html_to_pdf(html_path, pdf_path, browser, workdir, timeout=240):
-    """Print an HTML file to PDF with a headless browser. Raises ReportError on failure."""
+def find_browser(explicit=None):
+    found = find_browsers(explicit)
+    return found[0] if found else None
+
+
+def pdf_timeout(n_rows):
+    return min(600, 60 + n_rows // 50)
+
+
+def _pdf_ready(path):
+    """True once path is a complete PDF: the header is there and the end marker was written."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(5) != b"%PDF-":
+                return False
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 1024))
+            return b"%%EOF" in f.read()
+    except OSError:
+        return False
+
+
+def _kill_tree(proc):
+    """Ends proc and everything it started. Only our own process group / tree, never by name."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=0x08000000, timeout=20)
+        else:
+            os.killpg(proc.pid, 9)       # the browser was started as its own group leader
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _run_browser(cmd, pdf_path, timeout, cancel_event):
+    """Returns ("ok" | "exit" | "timeout", detail). Raises ReportCanceled. Never leaves it running."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise ReportCanceled("The PDF was canceled.")
+    flags = 0x08000000 if sys.platform == "win32" else 0     # CREATE_NO_WINDOW
+    extra = {} if sys.platform == "win32" else {"start_new_session": True}
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, creationflags=flags,
+                                **extra)
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ReportCanceled("The PDF was canceled.")
+                done = proc.poll() is not None
+                if _pdf_ready(pdf_path):
+                    return "ok", ""
+                if done:
+                    err.seek(0)
+                    return "exit", err.read().decode("utf-8", "replace").strip()[-300:]
+                if time.monotonic() > deadline:
+                    return "timeout", f"did not finish within {timeout} seconds"
+                time.sleep(0.25)
+        finally:
+            _kill_tree(proc)        # also helper processes left behind by an exited browser
+
+
+def html_to_pdf(html_path, pdf_path, browser, workdir, timeout, cancel_event=None):
+    """Prints HTML to PDF with one browser. Raises ReportError with the reason on failure."""
     import pathlib
     profile = tempfile.mkdtemp(prefix="profile_", dir=workdir)   # never touch the user's profile
-    args = ["--disable-gpu", "--no-first-run", "--no-default-browser-check",
-            "--disable-extensions", f"--user-data-dir={profile}",
-            "--no-pdf-header-footer", "--print-to-pdf-no-header",
-            f"--print-to-pdf={pdf_path}", "--virtual-time-budget=20000"]
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        args.append("--no-sandbox")       # Chromium refuses to run as root otherwise
-    url = pathlib.Path(html_path).resolve().as_uri()
-    flags = 0x08000000 if sys.platform == "win32" else 0     # CREATE_NO_WINDOW
-    detail = ""
-    for headless in ("--headless=new", "--headless"):        # newer and older browsers
-        try:
-            res = subprocess.run([browser, headless] + args + [url], capture_output=True,
-                                 timeout=timeout, creationflags=flags)
-            detail = (res.stderr or b"").decode("utf-8", "replace").strip()[-400:]
-        except subprocess.TimeoutExpired:
-            detail = f"the browser did not finish within {timeout // 60} minutes"
-            continue
-        except OSError as e:
-            raise ReportError(f"Could not start the browser {browser}: {e}")
-        try:
-            with open(pdf_path, "rb") as f:
-                if f.read(5) == b"%PDF-":
-                    return
-        except OSError:
-            pass
-    raise ReportError("The browser did not produce a PDF" + (f": {detail}" if detail else "."))
+    try:
+        args = ["--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                "--disable-extensions", f"--user-data-dir={profile}",
+                "--no-pdf-header-footer", "--print-to-pdf-no-header",
+                f"--print-to-pdf={pdf_path}", "--virtual-time-budget=20000"]
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.append("--no-sandbox")       # Chromium refuses to run as root otherwise
+        url = pathlib.Path(html_path).resolve().as_uri()
+        detail = ""
+        for headless in ("--headless=new", "--headless"):        # newer and older browsers
+            try:
+                state, detail = _run_browser([browser, headless] + args + [url], pdf_path,
+                                             timeout, cancel_event)
+            except OSError as e:
+                raise ReportError(f"could not start: {e}")
+            if state == "ok":
+                return
+            if state == "timeout":            # a hang will not improve with the older flag
+                break
+        raise ReportError(detail or "finished without producing a PDF")
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 def parse_pdf_tree(value):
@@ -2352,7 +2436,8 @@ def estimate_pdf_pages(n_rows):
     return PDF_OVERVIEW_PAGES + -(-n_rows // PDF_TREE_ROWS_PER_PAGE)
 
 
-def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=None):
+def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=None,
+                 cancel_event=None):
     """
     Write the report as HTML or PDF, chosen by the file extension.
     pdf_tree: how much of the folder tree the PDF shows (see parse_pdf_tree). The scan itself
@@ -2361,8 +2446,8 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
     if not path.lower().endswith(".pdf"):
         write_html_report(path, rows, meta, folder_basis)
         return
-    exe = find_browser(browser)
-    if not exe:
+    exes = find_browsers(browser)
+    if not exes:
         raise ReportError(NO_BROWSER_MSG)
     pdf_tree = parse_pdf_tree(pdf_tree)
     if pdf_tree == "all":
@@ -2379,17 +2464,23 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
         tmp_html = os.path.join(workdir, "report.html")
         tmp_pdf = os.path.join(workdir, "report.pdf")
         write_html_report(tmp_html, rows, meta, folder_basis, pdf=pdf_opt)
-        # big trees take the browser longer to lay out: allow more time for them
-        try:
-            html_to_pdf(tmp_html, tmp_pdf, exe, workdir, timeout=240 + n_rows // 40)
-        except ReportError as e:
+        failures = []
+        for exe in exes:
+            try:
+                html_to_pdf(tmp_html, tmp_pdf, exe, workdir, pdf_timeout(n_rows), cancel_event)
+                break
+            except ReportCanceled:
+                raise
+            except ReportError as e:
+                failures.append(f"{os.path.basename(exe)}: {e}")
+        else:
+            text = "No browser could make the PDF.\n" + "\n".join(failures)
             if n_rows > 4000:
-                raise ReportError(
-                    f"{e}\n\nThis PDF would have about {estimate_pdf_pages(n_rows):,} pages "
-                    f"({n_rows:,} folders), which may be more than the browser can print. Choose "
-                    "fewer levels or 'the path to every unused folder', or save the report as "
-                    "HTML, which shows the complete tree.")
-            raise
+                text += (f"\n\nThis PDF would have about {estimate_pdf_pages(n_rows):,} pages "
+                         f"({n_rows:,} folders), which may be more than a browser can print. "
+                         "Choose fewer levels or 'the path to every unused folder'.")
+            raise ReportError(text + "\n\nThe HTML report is still available and shows the "
+                              "complete tree.")
         os.replace(tmp_pdf, path)         # only replaces an existing file once the PDF is good
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
