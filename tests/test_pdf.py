@@ -157,6 +157,19 @@ class Pdf(unittest.TestCase):
         ranked = sorted(names, key=app._browser_rank)
         self.assertEqual(ranked, ["edge", "chrome", "chromium", "Brave"])
 
+    def test_brave_is_found_last_on_every_system(self):
+        env = {"ProgramFiles": "C:\\PF", "ProgramFiles(x86)": "C:\\PF86", "LOCALAPPDATA": "C:\\LA"}
+        for plat in ("win32", "linux", "darwin"):
+            with mock.patch.object(app.sys, "platform", plat), \
+                    mock.patch.dict(os.environ, env), \
+                    mock.patch.object(app.os.path, "isfile", return_value=True), \
+                    mock.patch.object(app.shutil, "which", side_effect=lambda n: "/usr/bin/" + n):
+                names = [os.path.basename(p).lower().replace("\\", "/").split("/")[-1]
+                         for p in app.find_browsers()]
+            self.assertTrue(any("brave" in n for n in names), plat)
+            self.assertIn("brave", names[-1], plat)
+            self.assertTrue(any("edge" in n for n in names[:1]), plat)
+
     # ---- the whole process tree ends, and the temporary folder goes, on every exit path
     @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
     def test_timeout_ends_the_helper_process(self):

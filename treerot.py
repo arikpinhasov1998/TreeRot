@@ -2305,14 +2305,17 @@ def find_browsers(explicit=None):
             if base:
                 cands += [os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
                           os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
-                          os.path.join(base, "Chromium", "Application", "chrome.exe")]
+                          os.path.join(base, "Chromium", "Application", "chrome.exe"),
+                          os.path.join(base, "BraveSoftware", "Brave-Browser", "Application",
+                                       "brave.exe")]
     elif sys.platform == "darwin":
         cands += ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
                   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
                   "/Applications/Chromium.app/Contents/MacOS/Chromium",
                   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"]
     for name in ("msedge", "microsoft-edge", "microsoft-edge-stable", "google-chrome",
-                 "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
+                 "google-chrome-stable", "chromium", "chromium-browser", "chrome",
+                 "brave-browser", "brave"):
         cands.append(shutil.which(name))
     found, seen = [], set()
     for c in cands:
