@@ -423,6 +423,30 @@ class FilesInTree(GuiCase):
             self.assertEqual(results["calls_after"], 4)
             self.assertEqual(results["peak"], 4)
 
+    def test_open_in_file_manager_on_a_file_row_does_not_run_the_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/tool.exe": OLD})
+            a = os.path.join(d, "a")
+            exe = os.path.join(a, "tool.exe")
+            results = {}
+
+            def check(w):
+                w._populate(a)
+                w._load_files(a)
+
+                def loaded():
+                    w.tree.selection_set(app.FILE_IID + exe)
+                    with mock.patch.object(app.subprocess, "Popen") as popen, \
+                            mock.patch.object(app.os, "startfile", create=True) as sf:
+                        w._open_path()
+                    results["argv"] = popen.call_args[0][0] if popen.called else None
+                    results["startfile"] = sf.called
+                self.wait_files(w, a, loaded)
+            self.run_case(d, check)
+            self.assertEqual(results["argv"], app.file_manager_command(exe, True, app.sys.platform))
+            self.assertFalse(results["startfile"])
+            self.assertNotEqual(results["argv"], ["open", exe])
+
 
 def app_messagebox():
     from tkinter import messagebox

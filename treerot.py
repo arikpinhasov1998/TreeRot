@@ -830,6 +830,16 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
+def file_manager_command(path, is_file, platform):
+    """argv that shows path in the file manager. A file is only revealed, never run.
+    None means: use os.startfile (a folder on Windows)."""
+    if platform.startswith("win"):
+        return ["explorer", "/select," + path] if is_file else None
+    if platform == "darwin":
+        return ["open", "-R", path] if is_file else ["open", path]
+    return ["xdg-open", os.path.dirname(path) if is_file else path]
+
+
 FILE_THREADS = 4                      # file listings read at the same time
 FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 
@@ -1866,13 +1876,12 @@ def run_gui(preload=None, on_ready=None):
             if not sel:
                 return
             path = self._path_of(sel[0])
+            argv = file_manager_command(path, sel[0].startswith(FILE_IID), sys.platform)
             try:
-                if sys.platform.startswith("win"):
+                if argv is None:
                     os.startfile(path)
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", path])
                 else:
-                    subprocess.Popen(["xdg-open", path])
+                    subprocess.Popen(argv)
             except Exception as e:
                 messagebox.showerror("Cannot open", str(e))
 
