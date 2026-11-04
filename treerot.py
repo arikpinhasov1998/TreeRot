@@ -830,6 +830,7 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
+FILE_IID, MORE_IID = "file::", "more::"
 
 
 def gui_unavailable(reason):
@@ -869,6 +870,11 @@ def run_gui(preload=None, on_ready=None):
             self.q = queue.Queue()
             self.cancel_event = threading.Event()
             self.period_text = ""
+            self.file_rows = {}       # tree iid -> file row
+            self.file_cache = {}      # folder path -> (sorted and filtered rows, number shown)
+            self.file_loading = set()
+            self.file_gen = 0         # results from an older tree are ignored
+            self.scan_ctx = None      # dates and rules of the scan, for listing files live
             self.n_excluded = 0
             self.scan_elapsed = None
             self.meter = None
@@ -1052,7 +1058,7 @@ def run_gui(preload=None, on_ready=None):
             frame = ttk.Frame(self, padding=(8, 0, 8, 8))
             frame.pack(fill="both", expand=True)
             self.tree = ttk.Treeview(frame, columns=cols, selectmode="browse")
-            self.tree.heading("#0", text="Folder")
+            self.tree.heading("#0", text="Folder / file")
             self.tree.column("#0", width=430, stretch=True)
             for c, (t, w, a) in {
                 "newest": ("Last file activity", 175, "center"),
@@ -1279,6 +1285,8 @@ def run_gui(preload=None, on_ready=None):
                 created_mode, activity = ("auto" if CREATED_NATIVE else "ctime"), "modified or created"
             else:
                 created_mode, activity = "off", "modified"
+            self.scan_ctx = {"lo": lo, "hi": hi, "created": created_mode, "activity": activity}
+            self.file_gen += 1        # late file listings from the previous scan are dropped
             self.scan_meta = {
                 "root": root, "excludes": excludes, "excluded_count": 0,
                 "scanned_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -1378,6 +1386,8 @@ def run_gui(preload=None, on_ready=None):
                         self.status_var.set(
                             f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
                             f"{n_excl:,} folder(s) excluded | period: {cutoff}")
+                    elif msg[0] == "files":
+                        self._files_loaded(msg[1], msg[2], msg[3], msg[4])
                     elif msg[0] == "report_done":
                         self._report_done(msg[1], msg[2])
                     elif msg[0] == "error":
@@ -1454,7 +1464,7 @@ def run_gui(preload=None, on_ready=None):
                 parent_iid, "end", iid=i.path, text=name, tags=(self._color(r),),
                 values=(fmt_ts(i.newest_file_mtime), fmt_ts(i.own_mtime),
                         f"{i.total_files:,}", f"{i.range_files:,}", fmt_size(i.total_size), pct))
-            if self._sorted_children(i.path):
+            if self._sorted_children(i.path) or i.direct_files:
                 self.tree.insert(i.path, "end", iid=i.path + DUMMY, text="")
 
         def _populate(self, iid):
@@ -1463,18 +1473,83 @@ def run_gui(preload=None, on_ready=None):
                 self.tree.delete(kids[0])
                 for r in self._sorted_children(iid):
                     self._insert(iid, r)
+                n = self.by_path[iid]["info"].direct_files
+                if n:             # bulk expansion never reads files: the user clicks this row
+                    self.tree.insert(iid, "end", iid=MORE_IID + iid, text=f"Show {n:,} files...")
 
         def _on_open(self, _e):
             self.levels_var.set("")          # a manual open no longer matches a chosen level
             iid = self.tree.focus()
-            if iid:
+            if iid in self.by_path:
                 self._populate(iid)
+                self._load_files(iid)
+
+        def _load_files(self, folder):
+            if (folder in self.file_cache or folder in self.file_loading
+                    or not self.by_path[folder]["info"].direct_files or not self.scan_ctx):
+                return
+            self.file_loading.add(folder)
+            if self.tree.exists(MORE_IID + folder):
+                self.tree.item(MORE_IID + folder, text="Loading files...")
+            gen, ctx, period = self.file_gen, self.scan_ctx, self.period_text
+
+            def work():
+                rows, err = list_folder_files(folder, ctx["lo"], ctx["hi"], ctx["created"],
+                                              ctx["activity"], period)
+                self.q.put(("files", gen, folder, rows, err))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _files_loaded(self, gen, folder, rows, err):
+            if gen != self.file_gen:
+                return
+            self.file_loading.discard(folder)
+            if not self.tree.exists(folder):
+                return
+            if err:
+                rows = [{"path": folder, "name": "Files could not be listed", "size": None,
+                         "mtime": None, "created": None, "color": GRAY, "reason": err}]
+            rows = sort_file_rows(filter_file_rows(rows, self.filter_var.get()),
+                                  self.sort_var.get())
+            self.file_cache[folder] = (rows, 0)
+            self._show_file_page(folder)
+
+        def _show_file_page(self, folder):
+            rows, shown = self.file_cache[folder]
+            more = MORE_IID + folder
+            if self.tree.exists(more):
+                self.tree.delete(more)
+            for f in rows[shown:shown + FILE_PAGE]:
+                iid = FILE_IID + f["path"]
+                self.file_rows[iid] = f
+                self.tree.insert(folder, "end", iid=iid, text=f["name"], tags=(f["color"],),
+                                 values=(fmt_ts(_file_activity(f) or None), "",
+                                         "", "1" if f["color"] == GREEN else "",
+                                         "" if f["size"] is None else fmt_size(f["size"]), ""))
+            shown = min(shown + FILE_PAGE, len(rows))
+            self.file_cache[folder] = (rows, shown)
+            if shown < len(rows):
+                self.tree.insert(folder, "end", iid=more,
+                                 text=f"Show more ({len(rows) - shown:,} left)...")
+
+        def _path_of(self, iid):
+            if iid in self.file_rows:
+                return self.file_rows[iid]["path"]
+            return iid
+
+        def _tip_text(self, iid, with_path):
+            if iid in self.file_rows:
+                f = self.file_rows[iid]
+                label = COLOR_LABEL[f["color"]]
+                return "\n".join(([f["path"]] if with_path else []) + [label, "- " + f["reason"]])
+            return reason_text(self.by_path[iid], self._folder_basis(), with_path)
 
         def _on_close_node(self, _e):
             self.levels_var.set("")
 
         def _refresh_tree(self):
             self.levels_var.set("")
+            self.file_gen += 1
+            self.file_rows, self.file_cache, self.file_loading = {}, {}, set()
             self.tree.delete(*self.tree.get_children())
             if not self.rows:
                 return
@@ -1483,6 +1558,7 @@ def run_gui(preload=None, on_ready=None):
             self._insert("", root)
             self._populate(self.root_path)
             self.tree.item(self.root_path, open=True)
+            self._load_files(self.root_path)
             self._update_summary()
 
         def _clear_summary(self):
@@ -1538,7 +1614,7 @@ def run_gui(preload=None, on_ready=None):
                 self._populate(iid)
                 self.tree.item(iid, open=True)
                 stack.extend(c for c in self.tree.get_children(iid)
-                             if not c.endswith(DUMMY))
+                             if c in self.by_path)
             self.config(cursor="")
             return True
 
@@ -1597,7 +1673,7 @@ def run_gui(preload=None, on_ready=None):
 
         def _close_rec(self, iid):
             for c in self.tree.get_children(iid):
-                if not c.endswith(DUMMY):
+                if c in self.by_path:
                     self._close_rec(c)
             self.tree.item(iid, open=False)
 
@@ -1623,7 +1699,7 @@ def run_gui(preload=None, on_ready=None):
                     self._populate(iid)
                     self.tree.item(iid, open=True)
                     stack.extend(c for c in self.tree.get_children(iid)
-                                 if not c.endswith(DUMMY))
+                                 if c in self.by_path)
             for r in self.rows:
                 if self._color(r) == RED and self.tree.exists(r["info"].path):
                     first_red = r["info"].path
@@ -1636,17 +1712,30 @@ def run_gui(preload=None, on_ready=None):
         # ---- selection / context menu
         def _on_select(self, _e):
             sel = self.tree.selection()
-            if sel and sel[0] in self.by_path:
-                i = self.by_path[sel[0]]["info"]
+            if not sel:
+                return
+            iid = sel[0]
+            if iid.startswith(MORE_IID):
+                folder = iid[len(MORE_IID):]
+                if folder in self.file_cache:
+                    self._show_file_page(folder)
+                else:
+                    self._load_files(folder)
+            elif iid in self.file_rows:
+                self.status_var.set(self.file_rows[iid]["path"])
+            elif iid in self.by_path:
+                i = self.by_path[iid]["info"]
                 self.status_var.set(
                     f"{i.path}  |  {i.total_files:,} files, {fmt_size(i.total_size)}"
                     + (f"  |  error: {i.error}" if i.error else ""))
 
         def _context_menu(self, e):
             iid = self.tree.identify_row(e.y)
-            if iid and iid in self.by_path:
+            if iid and (iid in self.by_path or iid in self.file_rows):
                 self._tip_leave()
                 self.tree.selection_set(iid)
+                self.menu.entryconfig("Exclude this folder (applies on next scan)",
+                                      state="normal" if iid in self.by_path else "disabled")
                 self.menu.tk_popup(e.x_root, e.y_root)
 
         def _exclude_selected(self):
@@ -1677,15 +1766,15 @@ def run_gui(preload=None, on_ready=None):
                 return
             self._tip_hide()
             self._tip_iid = iid
-            if iid in self.by_path:
+            if iid in self.by_path or iid in self.file_rows:
                 self._tip_job = self.after(
                     400, lambda: self._tip_show(iid, e.x_root, e.y_root))
 
         def _tip_show(self, iid, x, y):
             self._tip_job = None
-            if iid != self._tip_iid or iid not in self.by_path:
+            if iid != self._tip_iid or not (iid in self.by_path or iid in self.file_rows):
                 return
-            text = reason_text(self.by_path[iid], self._folder_basis(), with_path=True)
+            text = self._tip_text(iid, True)
             tw = tk.Toplevel(self)
             tw.wm_overrideredirect(True)
             try:
@@ -1706,29 +1795,29 @@ def run_gui(preload=None, on_ready=None):
 
         def _copy_reason(self, with_path):
             sel = self.tree.selection()
-            if sel and sel[0] in self.by_path:
+            if sel and (sel[0] in self.by_path or sel[0] in self.file_rows):
                 self.clipboard_clear()
-                self.clipboard_append(
-                    reason_text(self.by_path[sel[0]], self._folder_basis(), with_path))
+                self.clipboard_append(self._tip_text(sel[0], with_path))
                 self.status_var.set("Copied to clipboard.")
 
         def _copy_path(self):
             sel = self.tree.selection()
             if sel:
                 self.clipboard_clear()
-                self.clipboard_append(sel[0])
+                self.clipboard_append(self._path_of(sel[0]))
 
         def _open_path(self):
             sel = self.tree.selection()
             if not sel:
                 return
+            path = self._path_of(sel[0])
             try:
                 if sys.platform.startswith("win"):
-                    os.startfile(sel[0])
+                    os.startfile(path)
                 elif sys.platform == "darwin":
-                    subprocess.Popen(["open", sel[0]])
+                    subprocess.Popen(["open", path])
                 else:
-                    subprocess.Popen(["xdg-open", sel[0]])
+                    subprocess.Popen(["xdg-open", path])
             except Exception as e:
                 messagebox.showerror("Cannot open", str(e))
 

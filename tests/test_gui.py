@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.helpers import OLD, app, make_tree
+from tests.helpers import NEW, OLD, app, make_tree
 
 
 def tk_ok():
@@ -21,8 +21,9 @@ def tk_ok():
 
 @unittest.skipUnless(tk_ok(), "no display or tkinter")
 class GuiCase(unittest.TestCase):
-    def drive(self, root, check):
-        """Opens the window, scans root, runs check(window) after the scan, then closes."""
+    def drive(self, root, check, finished=None):
+        """Opens the window, scans root, runs check(window) after the scan, then closes.
+        If check starts async work, finished() says when it is done (waits up to 30 s)."""
         errors = []
 
         def ready(w):
@@ -39,7 +40,15 @@ class GuiCase(unittest.TestCase):
                     check(w)
                 except Exception as e:
                     errors.append(e)
-                w.after(1500, w.destroy)
+                left = [300]
+
+                def close():
+                    left[0] -= 1
+                    if finished is not None and not finished() and left[0] > 0:
+                        w.after(100, close)
+                    else:
+                        w.after(500, w.destroy)
+                w.after(1000, close)
             w.after(200, wait)
         app.run_gui(on_ready=ready)
         if errors:
@@ -102,6 +111,145 @@ class ShowLevels(GuiCase):
                 self.assertEqual(w.levels_var.get(), "")
                 self.assertFalse(w.tree.item(os.path.join(d, "a"), "open"))
             self.drive(d, check)
+
+
+class FilesInTree(GuiCase):
+    def setUp(self):
+        self.async_errors = []
+        self.done = False
+
+    def wait_files(self, w, folder, then, tries=400):
+        def poll():
+            try:
+                if folder in w.file_cache:
+                    then()
+                    self.done = True
+                elif tries_left[0] <= 0:
+                    raise AssertionError("files were never listed for " + folder)
+                else:
+                    tries_left[0] -= 1
+                    w.after(50, poll)
+            except Exception as e:      # surfaces in the test, not only on stderr
+                self.async_errors.append(e)
+        tries_left = [tries]
+        poll()
+
+    def run_case(self, d, check):
+        self.drive(d, check, lambda: bool(self.async_errors) or bool(self.done))
+        if self.async_errors:
+            raise self.async_errors[0]
+
+    def test_opening_a_folder_lists_files_and_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = {"big/f%04d.txt" % n: OLD for n in range(app.FILE_PAGE + 5)}
+            spec["big/new.txt"] = NEW
+            make_tree(d, spec)
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                w._load_files(big)
+
+                def loaded():
+                    results["page1"] = sum(k.startswith(app.FILE_IID)
+                                           for k in w.tree.get_children(big))
+                    results["more"] = w.tree.exists(app.MORE_IID + big)
+                    file_iid = app.FILE_IID + os.path.join(big, "new.txt")
+                    w.sort_var.set("Name (A-Z)")
+                    w._show_file_page(big)
+                    results["page2"] = sum(k.startswith(app.FILE_IID)
+                                           for k in w.tree.get_children(big))
+                    results["reason"] = w._tip_text(file_iid, True)
+                    results["path"] = w._path_of(file_iid)
+                self.wait_files(w, big, loaded)
+            self.run_case(d, check)
+            self.assertEqual(results["page1"], app.FILE_PAGE)
+            self.assertTrue(results["more"])
+            self.assertEqual(results["page2"], app.FILE_PAGE + 6)
+            self.assertIn("within the period", results["reason"])
+            self.assertEqual(results["path"], os.path.join(big, "new.txt"))
+
+    def test_selecting_the_more_row_loads_the_next_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"big/f%04d.txt" % n: OLD for n in range(app.FILE_PAGE + 5)})
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                w._load_files(big)
+
+                def loaded():
+                    more = app.MORE_IID + big
+                    w.tree.selection_set(more)
+                    w._on_select(None)
+                    results["files"] = sum(k.startswith(app.FILE_IID)
+                                           for k in w.tree.get_children(big))
+                    results["more_left"] = w.tree.exists(more)
+                self.wait_files(w, big, loaded)
+            self.run_case(d, check)
+            self.assertEqual(results["files"], app.FILE_PAGE + 5)
+            self.assertFalse(results["more_left"])
+
+    def test_file_row_maps_to_its_real_path_from_the_menu_handlers(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD, "a/two.txt": NEW})
+            a = os.path.join(d, "a")
+            results = {}
+
+            def check(w):
+                w._populate(a)
+                w._load_files(a)
+
+                def loaded():
+                    iid = app.FILE_IID + os.path.join(a, "two.txt")
+                    w.tree.selection_set(iid)
+                    w._copy_path()
+                    results["clip"] = w.clipboard_get()
+                    results["folder_iid_path"] = w._path_of(a)
+                    w._copy_reason(True)
+                    results["reason"] = w.clipboard_get()
+                    w._on_select(None)
+                    results["status"] = w.status_var.get()
+                    ev = mock.Mock(y=0, x_root=0, x_Root=0)
+                    w.tree.identify_row = lambda y: iid
+                    with mock.patch.object(w.menu, "tk_popup"):
+                        w._context_menu(ev)
+                    results["exclude_state"] = str(w.menu.entrycget(
+                        "Exclude this folder (applies on next scan)", "state"))
+                self.wait_files(w, a, loaded)
+            self.run_case(d, check)
+            self.assertEqual(results["clip"], os.path.join(a, "two.txt"))
+            self.assertEqual(results["folder_iid_path"], a)
+            self.assertIn(os.path.join(a, "two.txt"), results["reason"])
+            self.assertEqual(results["status"], os.path.join(a, "two.txt"))
+            self.assertEqual(results["exclude_state"], "disabled")
+
+    def test_listing_failure_shows_a_gray_row_with_the_reason(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"gone/one.txt": OLD})
+            gone = os.path.join(d, "gone")
+            results = {}
+
+            def check(w):
+                w._populate(gone)
+                shutil.rmtree(gone)          # deleted after the scan
+                w._load_files(gone)
+
+                def loaded():
+                    kids = [k for k in w.tree.get_children(gone) if k.startswith(app.FILE_IID)]
+                    results["kids"] = kids
+                    results["color"] = w.file_rows[kids[0]]["color"]
+                    results["text"] = w.tree.item(kids[0], "text")
+                    results["reason"] = w._tip_text(kids[0], False)
+                self.wait_files(w, gone, loaded)
+            self.run_case(d, check)
+            self.assertEqual(len(results["kids"]), 1)
+            self.assertEqual(results["color"], app.GRAY)
+            self.assertEqual(results["text"], "Files could not be listed")
+            self.assertIn("could not be listed", results["reason"])
 
 
 def app_messagebox():
