@@ -51,9 +51,17 @@ def make_browser(folder, kind):
     return path
 
 
-def read_pid(path):
-    with open(path) as f:
-        return int(f.read())
+def read_pid(path, seconds=15):
+    """The helper's pid, waiting (bounded) for a slow start; fails clearly if it never appears."""
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            with open(path) as f:
+                return int(f.read())
+        except (OSError, ValueError):       # not there yet, or half written
+            if time.monotonic() > end:
+                raise AssertionError(f"the fake browser never wrote its helper's pid to {path}")
+            time.sleep(0.05)
 
 
 def alive(pid):
@@ -105,8 +113,8 @@ class Pdf(unittest.TestCase):
 
     def _reap_child(self):          # a failing test must not leave a sleeper behind
         try:
-            os.kill(read_pid(self.pidfile), 9)
-        except (OSError, ValueError):
+            os.kill(read_pid(self.pidfile, 0), 9)
+        except (OSError, ValueError, AssertionError):
             pass
 
     def browser(self, kind):
@@ -300,13 +308,14 @@ class Pdf(unittest.TestCase):
     # ---- the whole process tree ends, and the temporary folder goes, on every exit path
     def test_timeout_ends_the_helper_process(self):
         with self.assertRaises(app.ReportError):
-            self.write([self.browser("hang_child")], timeout=2)
+            self.write([self.browser("hang_child")], timeout=6)
         self.assertTrue(wait_dead(self.child_pid()))
         self.assertEqual(leftovers(self.d), [])
 
     def test_cancel_ends_the_helper_process(self):
         ev = threading.Event()
-        threading.Timer(1.0, ev.set).start()
+        # cancel only once the helper exists, however slowly the fake browser started
+        threading.Thread(target=lambda: (read_pid(self.pidfile), ev.set()), daemon=True).start()
         with self.assertRaises(app.ReportCanceled):
             self.write([self.browser("hang_child")], timeout=60, cancel_event=ev)
         self.assertTrue(wait_dead(self.child_pid()))
