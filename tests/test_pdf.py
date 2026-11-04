@@ -214,7 +214,34 @@ class Pdf(unittest.TestCase):
                 raise OSError("no job")
         with mock.patch.object(app.sys, "platform", "win32"), \
                 mock.patch.object(app, "_WinJob", Boom, create=True):
-            self.assertIsNone(app._attach_job(mock.Mock(pid=1)))
+            self.assertIsNone(app._new_job())
+
+    def test_no_job_on_other_systems(self):
+        with mock.patch.object(app.sys, "platform", "linux"):
+            self.assertIsNone(app._new_job())
+
+    def test_failed_assignment_closes_the_job_and_falls_back(self):
+        job = mock.Mock()
+        job.assign.side_effect = OSError("denied")
+        self.assertIsNone(app._attach_job(mock.Mock(pid=1), job))
+        job.close.assert_called_once()
+        good = mock.Mock()
+        self.assertIs(app._attach_job(mock.Mock(pid=1), good), good)
+
+    def test_the_job_is_made_before_the_browser_starts(self):
+        order = []
+        real_popen = app.subprocess.Popen
+
+        def popen(*a, **k):
+            order.append("popen")
+            return real_popen(*a, **k)
+        job = mock.Mock()
+        with mock.patch.object(app, "_new_job", side_effect=lambda: order.append("job") or job), \
+                mock.patch.object(app, "_attach_job",
+                                  side_effect=lambda p, j: order.append("attach") or None), \
+                mock.patch.object(app.subprocess, "Popen", popen):
+            self.write([self.browser("good")])
+        self.assertEqual(order, ["job", "popen", "attach"])
 
     def test_job_structures_have_the_windows_sizes(self):
         import ctypes

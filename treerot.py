@@ -2466,20 +2466,29 @@ class _WinJob:
             self._k.CloseHandle(h)
 
 
-def _attach_job(proc):
-    """Puts a just-started browser in a Job Object on Windows. None when that is not possible:
+def _new_job():
+    """A Job Object on Windows, made BEFORE the browser starts (its first use also loads ctypes,
+    which is slow enough for a child to be started meanwhile). None when that is not possible:
     never a reason to stop the export (taskkill /T is the fallback)."""
     if sys.platform != "win32":
         return None
-    job = None
     try:
-        job = _WinJob()
+        return _WinJob()
+    except Exception:
+        return None
+
+
+def _attach_job(proc, job):
+    """Puts the just-started browser in job. None (and the job closed) if that fails, so that
+    ending the tree falls back to taskkill /T."""
+    if job is None:
+        return None
+    try:
         job.assign(proc)
         return job
     except Exception:
         try:
-            if job is not None:
-                job.close()
+            job.close()
         except Exception:
             pass
         return None
@@ -2562,9 +2571,15 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
     flags = 0x08000000 if sys.platform == "win32" else 0     # CREATE_NO_WINDOW
     extra = {} if sys.platform == "win32" else {"start_new_session": True}
     with tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, creationflags=flags,
-                                **extra)
-        proc.job = _attach_job(proc)         # Windows only; None elsewhere or if it fails
+        job = _new_job()
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err,
+                                    creationflags=flags, **extra)
+        except BaseException:
+            if job is not None:
+                job.close()
+            raise
+        proc.job = _attach_job(proc, job)    # Windows only; None elsewhere or if it fails
         with _LIVE_LOCK:
             _LIVE_PROCS.add(proc)
         deadline = time.monotonic() + timeout
