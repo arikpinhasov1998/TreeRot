@@ -194,6 +194,18 @@ class Pdf(unittest.TestCase):
         self.assertEqual(leftovers(self.d), [])
 
 
+def when(w, cond, then, seconds=20):
+    """Runs then() from the Tk loop once cond() holds. No nested update(): Tk 8.5 never returns."""
+    end = time.monotonic() + seconds
+
+    def step():
+        if cond() or time.monotonic() > end:
+            then()
+        else:
+            w.after(50, step)
+    w.after(50, step)
+
+
 @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
 class WindowClose(GuiCase):
     def test_closing_the_window_during_an_export_ends_the_browser(self):
@@ -209,19 +221,18 @@ class WindowClose(GuiCase):
 
             def check(w):
                 w._save_report("pdf", "2", None)
-                end = time.monotonic() + 15
-                while not os.path.exists(pidfile) and time.monotonic() < end:
-                    w.update()
-                    time.sleep(0.05)
-                seen["pid"] = read_pid(pidfile)
-                seen["workdir"] = leftovers(out_dir)
-                w.after(0, w._on_close)
+
+                def started():
+                    seen["pid"] = read_pid(pidfile)
+                    seen["workdir"] = leftovers(out_dir)
+                    w._on_close()
+                when(w, lambda: os.path.exists(pidfile), started, 15)
 
             try:
                 with mock.patch.dict(os.environ, {"FAKE_PIDFILE": pidfile}), \
                         mock.patch.object(app, "find_browsers", return_value=[browser]), \
                         mock.patch("tkinter.filedialog.asksaveasfilename", return_value=out):
-                    self.drive(share, check)
+                    self.drive(share, check, finished=lambda: "pid" in seen)
                 self.assertTrue(seen["workdir"], "the export never started its work folder")
                 self.assertTrue(wait_dead(seen["pid"]))
                 self.assertEqual(leftovers(out_dir), [])
@@ -245,17 +256,15 @@ class WindowClose(GuiCase):
                 with mock.patch("tkinter.filedialog.asksaveasfilename", return_value=out):
                     w._save_report("pdf", "2", None)
                 seen["btn"] = str(w.cancel_btn.cget("state"))
-                time.sleep(0.5)
-                w._cancel()
-                end = time.monotonic() + 20
-                while "canceled" not in w.status_var.get() and time.monotonic() < end:
-                    w.update()
-                    time.sleep(0.05)
-                seen["status"] = w.status_var.get()
-                seen["report_btn"] = str(w.report_btn.cget("state"))
+
+                def canceled():
+                    seen["status"] = w.status_var.get()
+                    seen["report_btn"] = str(w.report_btn.cget("state"))
+                w.after(500, w._cancel)
+                when(w, lambda: "canceled" in w.status_var.get(), canceled)
 
             with mock.patch.object(app, "find_browsers", return_value=[browser]):
-                self.drive(share, check)
+                self.drive(share, check, finished=lambda: "status" in seen)
             self.assertEqual(seen["btn"], "normal")
             self.assertIn("canceled", seen["status"])
             self.assertEqual(seen["report_btn"], "normal")
