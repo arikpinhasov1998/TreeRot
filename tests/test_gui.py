@@ -403,21 +403,24 @@ class FilesInTree(GuiCase):
 
             def check(w):
                 folders = [os.path.join(d, "f%d" % n) for n in range(6)]
-                with mock.patch.object(app, "list_folder_files", fake):
-                    for f in folders:
-                        w._load_files(f)
+                patcher = mock.patch.object(app, "list_folder_files", fake)
+                patcher.start()                     # stays active until the test is cleaned up
+                self.addCleanup(patcher.stop)
+                self.addCleanup(gate.set)
+                for f in folders:
+                    w._load_files(f)
 
-                    def later():
-                        results["calls_before"] = state["calls"]
-                        w._refresh_tree()           # new generation: queued work is dropped
-                        gate.set()
-                        w.after(800, end)
+                def later():
+                    results["calls_before"] = state["calls"]
+                    w._refresh_tree()               # new generation: queued work is dropped
+                    gate.set()
+                    w.after(800, end)
 
-                    def end():
-                        results["calls_after"] = state["calls"]
-                        results["peak"] = state["peak"]
-                        self.done = True
-                    w.after(500, later)
+                def end():
+                    results["calls_after"] = state["calls"]
+                    results["peak"] = state["peak"]
+                    self.done = True
+                w.after(500, later)
             self.run_case(d, check)
             self.assertEqual(results["calls_before"], 4)
             self.assertEqual(results["calls_after"], 4)
