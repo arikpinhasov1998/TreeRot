@@ -447,6 +447,26 @@ class FilesInTree(GuiCase):
             self.assertFalse(results["startfile"])
             self.assertNotEqual(results["argv"], ["open", exe])
 
+    def test_open_never_runs_a_folder_row_that_became_a_file(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"p/keep.txt": OLD, "p/f/x.txt": OLD})
+            p, f = os.path.join(d, "p"), os.path.join(d, "p", "f")
+            results = {}
+
+            def check(w):
+                w._populate(p)
+                shutil.rmtree(f)
+                with open(f, "wb") as fh:
+                    fh.write(b"x")
+                w.tree.selection_set(f)                 # the folder row, now a file on disk
+                with mock.patch.object(app.subprocess, "Popen") as popen:
+                    w._open_path()
+                results["argv"] = popen.call_args[0][0] if popen.called else None
+                self.done = True
+            self.run_case(d, check)
+            self.assertEqual(results["argv"], app.file_manager_command(f, True, app.sys.platform))
+
 
 def app_messagebox():
     from tkinter import messagebox

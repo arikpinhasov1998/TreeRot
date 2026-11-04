@@ -1878,7 +1878,8 @@ def run_gui(preload=None, on_ready=None):
             if not sel:
                 return
             path = self._path_of(sel[0])
-            argv = file_manager_command(path, sel[0].startswith(FILE_IID), sys.platform)
+            is_file = sel[0].startswith((FILE_IID, FILEERR_IID)) or os.path.isfile(path)
+            argv = file_manager_command(path, is_file, sys.platform)
             try:
                 if argv is None:
                     os.startfile(path)
