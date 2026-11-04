@@ -37,6 +37,7 @@ Requires only the Python 3.8+ standard library (tkinter ships with Python).
 """
 
 import argparse
+import atexit
 import csv
 import errno
 import fnmatch
@@ -1243,14 +1244,23 @@ def run_gui(preload=None, on_ready=None):
             })
             save_settings(self.settings)
 
+        REPORT_JOIN_SECONDS = 10
+
         def _end_report(self):
-            """Stops a running PDF export and waits until its browser and temp folder are gone."""
+            """Stops a running export: asks it to cancel, waits a little, and if its worker is
+            still busy ends the browser and removes the temp folder from here."""
             self.report_cancel.set()
             t = self._report_thread
             if t is not None and t.is_alive() and t is not threading.current_thread():
-                t.join(30)
+                t.join(self.REPORT_JOIN_SECONDS)
+                if t.is_alive():
+                    _end_live_exports()
 
         def destroy(self):
+            try:                         # not frozen-looking while a browser is being ended
+                self.withdraw()
+            except tk.TclError:
+                pass
             self._end_report()           # the browser must not outlive the window
             try:                         # no stray callback may fire into a dead interpreter
                 self.after_cancel(self._poll_job)
@@ -2195,7 +2205,7 @@ def _period_phrase(period):
     return period
 
 
-def report_data(rows, meta, folder_basis=False):
+def report_data(rows, meta, folder_basis=False, cancel_event=None):
     """Compact, JSON-ready data for the report. Rows are ordered so a parent always comes first."""
     root = next(r for r in rows if r["info"].parent is None)
     kids = {}
@@ -2212,7 +2222,9 @@ def report_data(rows, meta, folder_basis=False):
     code = {GREEN: "g", RED: "r", GRAY: "x"}
     by_path = {r["info"].path: r for r in rows}
     out = []
-    for r in order:
+    for n, r in enumerate(order):
+        if n % 2000 == 0:
+            _check_canceled(cancel_event)
         i = r["info"]
         c = color_of(r, folder_basis)
         special = c == GRAY or bool(i.error) or bool(i.unreadable_below and not folder_basis)
@@ -2254,16 +2266,37 @@ def report_data(rows, meta, folder_basis=False):
     }
 
 
-def write_html_report(path, rows, meta, folder_basis=False, pdf=None):
+def _check_canceled(cancel_event):
+    if cancel_event is not None and cancel_event.is_set():
+        raise ReportCanceled("The report was canceled.")
+
+
+def write_html_report(path, rows, meta, folder_basis=False, pdf=None, cancel_event=None):
+    """Writes the HTML report. Checks cancel_event as it works; a canceled or failed write leaves
+    no partial file, and an existing report is only replaced once the new one is complete."""
     import html as html_mod
-    data = report_data(rows, meta, folder_basis)
+    _check_canceled(cancel_event)
+    data = report_data(rows, meta, folder_basis, cancel_event)
     data["pdf"] = pdf                     # None for the interactive HTML report
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     payload = payload.replace("</", "<\\/").replace("<!--", "<\\!--")   # safe inside <script>
     title = f"Folder activity report - {meta.get('root', '')}"
     page = REPORT_TEMPLATE.replace("__TITLE__", html_mod.escape(title)).replace("__DATA__", payload)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(page)
+    _check_canceled(cancel_event)
+    part = path + ".part"
+    try:
+        with open(part, "w", encoding="utf-8") as f:
+            for i in range(0, len(page), 1 << 20):     # a share can be slow: look up every MB
+                f.write(page[i:i + (1 << 20)])
+                _check_canceled(cancel_event)
+        _check_canceled(cancel_event)
+        os.replace(part, path)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
 
 
 class ReportError(Exception):
@@ -2355,6 +2388,7 @@ class _WinJob:
     def __init__(self):
         import ctypes
         from ctypes import wintypes
+        self._lock = threading.Lock()
         self._k = k = ctypes.WinDLL("kernel32", use_last_error=True)
         self._ct = ctypes
         ULONG_PTR = ctypes.c_size_t
@@ -2426,7 +2460,8 @@ class _WinJob:
         self._k.TerminateJobObject(self.handle, 1)
 
     def close(self):
-        h, self.handle = self.handle, None
+        with self._lock:             # the window's thread and the worker may both get here
+            h, self.handle = self.handle, None
         if h:
             self._k.CloseHandle(h)
 
@@ -2448,6 +2483,29 @@ def _attach_job(proc):
         except Exception:
             pass
         return None
+
+
+_LIVE_LOCK = threading.Lock()
+_LIVE_PROCS = set()          # browsers started by a running export
+_LIVE_DIRS = {}            # temporary report folder -> cancel flag of the export using it
+
+
+def _end_live_exports():
+    """Ends the browsers and removes the temp folders of every export still running. Used when
+    the window closes (or the program exits) and a worker is slow to finish by itself. Safe to
+    call from several threads: ending a tree and removing a folder both tolerate repeats. Only
+    processes this program started are touched."""
+    with _LIVE_LOCK:
+        procs, dirs = list(_LIVE_PROCS), list(_LIVE_DIRS.items())
+    for _, flag in dirs:            # first stop the workers, so none starts another browser
+        flag.set()
+    for proc in procs:
+        _kill_tree(proc)
+    for d, _ in dirs:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+atexit.register(_end_live_exports)
 
 
 def _tree_alive(proc):
@@ -2507,6 +2565,8 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, creationflags=flags,
                                 **extra)
         proc.job = _attach_job(proc)         # Windows only; None elsewhere or if it fails
+        with _LIVE_LOCK:
+            _LIVE_PROCS.add(proc)
         deadline = time.monotonic() + timeout
         try:
             while True:
@@ -2523,6 +2583,8 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
                 time.sleep(0.25)
         finally:
             _kill_tree(proc)        # also helper processes left behind by an exited browser
+            with _LIVE_LOCK:
+                _LIVE_PROCS.discard(proc)
 
 
 def html_to_pdf(html_path, pdf_path, browser, workdir, timeout, cancel_event=None):
@@ -2608,8 +2670,11 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
     pdf_tree: how much of the folder tree the PDF shows (see parse_pdf_tree). The scan itself
     always covers every level; this only limits what is printed.
     """
+    if cancel_event is None:
+        cancel_event = threading.Event()      # so shutting down can still stop this export
+    _check_canceled(cancel_event)
     if not path.lower().endswith(".pdf"):
-        write_html_report(path, rows, meta, folder_basis)
+        write_html_report(path, rows, meta, folder_basis, cancel_event=cancel_event)
         return
     exes = find_browsers(browser)
     if not exes:
@@ -2625,10 +2690,14 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
     # work next to the target: some browsers (e.g. Ubuntu's snap Chromium) cannot read /tmp
     workdir = tempfile.mkdtemp(prefix=".treerot_report_",
                                dir=os.path.dirname(os.path.abspath(path)))
+    with _LIVE_LOCK:
+        _LIVE_DIRS[workdir] = cancel_event
     try:
+        _check_canceled(cancel_event)
         tmp_html = os.path.join(workdir, "report.html")
         tmp_pdf = os.path.join(workdir, "report.pdf")
-        write_html_report(tmp_html, rows, meta, folder_basis, pdf=pdf_opt)
+        write_html_report(tmp_html, rows, meta, folder_basis, pdf=pdf_opt,
+                          cancel_event=cancel_event)
         failures = []
         for exe in exes:
             try:
@@ -2649,6 +2718,8 @@ def write_report(path, rows, meta, folder_basis=False, pdf_tree="2", browser=Non
         os.replace(tmp_pdf, path)         # only replaces an existing file once the PDF is good
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+        with _LIVE_LOCK:
+            _LIVE_DIRS.pop(workdir, None)
 
 
 def open_with_default_app(path):

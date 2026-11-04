@@ -246,6 +246,57 @@ class Pdf(unittest.TestCase):
             app._kill_tree(proc)
         self.assertIn("taskkill", run.call_args[0][0])
 
+    # ---- closing the app while a report is being made
+    def test_html_report_stops_when_canceled_and_leaves_nothing(self):
+        out = os.path.join(self.d, "r.html")
+        ev = threading.Event()
+        ev.set()
+        with self.assertRaises(app.ReportCanceled):
+            app.write_report(out, self.rows, META, cancel_event=ev)
+        self.assertEqual([n for n in os.listdir(self.d) if n.startswith("r.html")], [])
+
+    def test_html_report_checks_cancel_while_it_works(self):
+        out = os.path.join(self.d, "r.html")
+
+        class LateCancel:
+            def __init__(self):
+                self.n = 0
+
+            def is_set(self):
+                self.n += 1
+                return self.n > 3
+        with self.assertRaises(app.ReportCanceled):
+            app.write_report(out, self.rows, META, cancel_event=LateCancel())
+        self.assertEqual([n for n in os.listdir(self.d) if n.startswith("r.html")], [])
+
+    def test_html_report_without_cancel_still_writes(self):
+        out = os.path.join(self.d, "r.html")
+        app.write_report(out, self.rows, META)
+        self.assertIn("<html", open(out, encoding="utf-8").read(200))
+        self.assertEqual([n for n in os.listdir(self.d) if n.endswith(".part")], [])
+
+    def test_end_live_exports_ends_a_browser_whose_worker_is_stuck(self):
+        errors = []
+
+        def work():
+            try:
+                self.write([self.browser("hang_child")], timeout=60)
+            except app.ReportError as e:
+                errors.append(e)
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        end = time.monotonic() + 15
+        while not os.path.exists(self.pidfile) and time.monotonic() < end:
+            time.sleep(0.05)
+        pid = self.child_pid()
+        app._end_live_exports()              # what closing the window does after its wait
+        self.assertTrue(wait_dead(pid))
+        self.assertEqual(leftovers(self.d), [])
+        t.join(20)
+        self.assertFalse(t.is_alive())
+        app._end_live_exports()              # a second caller is harmless
+        self.assertEqual(leftovers(self.d), [])
+
     # ---- the whole process tree ends, and the temporary folder goes, on every exit path
     def test_timeout_ends_the_helper_process(self):
         with self.assertRaises(app.ReportError):
@@ -327,6 +378,53 @@ class WindowClose(GuiCase):
                         os.kill(seen["pid"], 9)
                     except OSError:
                         pass
+
+    def test_close_does_not_wait_forever_and_still_cleans_up(self):
+        with tempfile.TemporaryDirectory() as d:
+            share = os.path.join(d, "share")
+            make_tree(share, {"a/f.txt": OLD})
+            out_dir = os.path.join(d, "out")
+            os.mkdir(out_dir)
+            pidfile = os.path.join(d, "child.pid")
+            browser = make_browser(d, "hang_child")
+            seen = {}
+
+            def check(w):
+                w._save_report("pdf", "2", None)
+
+                def started():
+                    seen["pid"] = read_pid(pidfile)
+                    w.REPORT_JOIN_SECONDS = 0       # the worker is "stuck": do not wait for it
+                    w._on_close()
+                when(w, lambda: os.path.exists(pidfile), started, 15)
+
+            try:
+                with mock.patch.dict(os.environ, {"FAKE_PIDFILE": pidfile}), \
+                        mock.patch.object(app, "find_browsers", return_value=[browser]), \
+                        mock.patch("tkinter.filedialog.asksaveasfilename",
+                                   return_value=os.path.join(out_dir, "r.pdf")):
+                    self.drive(share, check, finished=lambda: "pid" in seen)
+                self.assertTrue(wait_dead(seen["pid"]))
+                self.assertEqual(leftovers(out_dir), [])
+            finally:
+                if "pid" in seen:
+                    try:
+                        os.kill(seen["pid"], 9)
+                    except OSError:
+                        pass
+
+    def test_window_is_hidden_before_it_waits(self):
+        with tempfile.TemporaryDirectory() as d:
+            share = os.path.join(d, "share")
+            make_tree(share, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                w._end_report = lambda: seen.update(state=w.state())
+                w._on_close()
+                seen["closed"] = True
+            self.drive(share, check, finished=lambda: "closed" in seen)
+            self.assertEqual(seen["state"], "withdrawn")
 
     def test_cancel_button_cancels_the_export_without_touching_the_scan_flag(self):
         with tempfile.TemporaryDirectory() as d:
