@@ -642,6 +642,125 @@ class FilesInTree(GuiCase):
             self.assertFalse(results["dragged"])
             self.assertTrue(results["clicked"])
 
+    def _patch_listing(self, fake, timeout=0.4):
+        import threading
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        for p in (mock.patch.object(app, "list_folder_files", fake),
+                  mock.patch.object(app, "LISTING_TIMEOUT", timeout)):
+            p.start()
+            self.addCleanup(p.stop)
+        return gate
+
+    @staticmethod
+    def _until(w, cond, then, tries=300):
+        def poll(n=[tries]):
+            if cond() or n[0] <= 0:
+                then()
+            else:
+                n[0] -= 1
+                w.after(50, poll)
+        poll()
+
+    def test_a_slow_listing_that_keeps_making_progress_is_not_timed_out(self):
+        import time
+        real = app.list_folder_files
+
+        def slow(path, *a):
+            progress = a[-1]
+            for _ in range(12):                     # 1.2 s in total, never silent for 0.4 s
+                time.sleep(0.1)
+                progress()
+            return real(path, *a)
+        self._patch_listing(slow)
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD, "a/two.txt": NEW})
+            a = os.path.join(d, "a")
+            results = {}
+
+            def check(w):
+                w._populate(a)
+                w._load_files(a)
+
+                def done():
+                    results["names"] = sorted(f["name"] for k, f in w.file_rows.items()
+                                              if k.startswith(app.FILE_IID))
+                    results["err"] = [k for k in w.file_rows if k.startswith(app.FILEERR_IID)]
+                    self.done = True
+                self._until(w, lambda: a in w.file_cache, done)
+            self.run_case(d, check)
+            self.assertEqual(results["names"], ["one.txt", "two.txt"])
+            self.assertEqual(results["err"], [])
+
+    def test_a_listing_that_stalls_after_some_progress_gets_the_error_row(self):
+        def stalls(path, *a):
+            progress = a[-1]
+            for _ in range(3):
+                progress()
+            gate.wait(20)
+            return [], ""
+        gate = self._patch_listing(stalls)
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD})
+            a = os.path.join(d, "a")
+            results = {}
+
+            def check(w):
+                w._populate(a)
+                w._load_files(a)
+
+                def done():
+                    results["reasons"] = [f["reason"] for k, f in w.file_rows.items()
+                                          if k.startswith(app.FILEERR_IID)]
+                    results["active"] = w.file_active
+                    self.done = True
+                self._until(w, lambda: a in w.file_cache, done)
+            self.run_case(d, check)
+            self.assertEqual(len(results["reasons"]), 1)
+            self.assertIn("did not respond", results["reasons"][0])
+            self.assertEqual(results["active"], 0)
+
+    def test_reopening_a_timed_out_folder_retries(self):
+        real = app.list_folder_files
+        calls = []
+
+        def first_hangs(path, *a):
+            calls.append(path)
+            if len(calls) == 1:
+                gate.wait(20)
+            return real(path, *a)
+        gate = self._patch_listing(first_hangs)
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD})
+            a = os.path.join(d, "a")
+            results = {}
+
+            def check(w):
+                w._populate(a)
+                w._load_files(a)
+
+                def timed_out():
+                    results["cached_after_timeout"] = a in w.file_cache
+                    results["err_row"] = w.tree.exists(app.FILEERR_IID + a)
+                    w.tree.item(a, open=False)
+                    w.tree.item(a, open=True)
+                    w._load_files(a)                    # what reopening the folder does
+                    self._until(w, lambda: a in w.file_cache, retried)
+
+                def retried():
+                    results["calls"] = len(calls)
+                    results["rows"] = [f["name"] for k, f in w.file_rows.items()
+                                       if k.startswith(app.FILE_IID)]
+                    results["err_after"] = w.tree.exists(app.FILEERR_IID + a)
+                    self.done = True
+                self._until(w, lambda: w.tree.exists(app.FILEERR_IID + a), timed_out)
+            self.run_case(d, check)
+            self.assertFalse(results["cached_after_timeout"])
+            self.assertTrue(results["err_row"])
+            self.assertEqual(results["calls"], 2)
+            self.assertEqual(results["rows"], ["one.txt"])
+            self.assertFalse(results["err_after"])
+
 
 def app_messagebox():
     from tkinter import messagebox

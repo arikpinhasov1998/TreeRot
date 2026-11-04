@@ -712,16 +712,19 @@ def _in_period(ts, lo, hi):
     return ts is not None and (lo is None or ts >= lo) and (hi is None or ts <= hi)
 
 
-def list_folder_files(path, lo, hi, created, activity, period):
+def list_folder_files(path, lo, hi, created, activity, period, progress=None):
     """
     Reads the files directly in one folder, as they are on disk now.
     Returns (rows, error_text). Uses the same date rules as scan_tree and, like it,
-    skips symbolic links.
+    skips symbolic links. progress, if given, is called with no arguments after each entry
+    is read (from the calling thread, so it must not touch Tk).
     """
     rows = []
     try:
         with os.scandir(path) as it:
             for entry in it:
+                if progress is not None:
+                    progress()
                 row = {"path": entry.path, "name": entry.name, "size": None, "mtime": None,
                        "created": None, "color": GRAY, "reason": ""}
                 try:
@@ -1535,6 +1538,10 @@ def run_gui(preload=None, on_ready=None):
                     or not self.by_path[folder]["info"].direct_files or not self.scan_ctx):
                 return
             self.file_loading.add(folder)
+            old = FILEERR_IID + folder          # a retry replaces the earlier error row
+            if self.tree.exists(old):
+                self.tree.delete(old)
+            self.file_rows.pop(old, None)
             if self.tree.exists(MORE_IID + folder):
                 self.tree.item(MORE_IID + folder, text="Loading files...")
             self.file_queue.append(folder)
@@ -1548,17 +1555,22 @@ def run_gui(preload=None, on_ready=None):
             gen, ctx, period = self.file_gen, self.scan_ctx, self.period_text
             if len(self.file_abandoned) >= MAX_ABANDONED:
                 self._files_loaded(gen, folder, [], "Too many earlier listings are stuck "
-                                   "waiting for a server, so this folder was not read.")
+                                   "waiting for a server, so this folder was not read.",
+                                   final=False)
                 return
             self.file_token += 1
             token = self.file_token
-            self.file_live[token] = (gen, folder)
+            count = [0]               # entries read so far; bumped by the worker, read here
+
+            def progress():
+                count[0] += 1
+            self.file_live[token] = {"gen": gen, "folder": folder, "count": count, "seen": 0}
             self.file_active += 1
 
             def work():
                 try:
                     rows, err = list_folder_files(folder, ctx["lo"], ctx["hi"], ctx["created"],
-                                                  ctx["activity"], period)
+                                                  ctx["activity"], period, progress)
                 except Exception as e:
                     rows, err = [], f"The files in this folder could not be listed. {e}"
                 self.q.put(("files", gen, folder, rows, err, token))
@@ -1566,16 +1578,21 @@ def run_gui(preload=None, on_ready=None):
             self.after(int(LISTING_TIMEOUT * 1000), lambda: self._listing_timeout(token))
 
         def _listing_timeout(self, token):
-            if token not in self.file_live:
+            live = self.file_live.get(token)
+            if live is None:
                 return                                   # it answered in time
-            gen, folder = self.file_live.pop(token)
+            if live["count"][0] != live["seen"]:         # still reading entries: not silent
+                live["seen"] = live["count"][0]
+                self.after(int(LISTING_TIMEOUT * 1000), lambda: self._listing_timeout(token))
+                return
+            del self.file_live[token]
             self.file_active -= 1
             self.file_abandoned.add(token)               # the thread may still be blocked
-            self._files_loaded(gen, folder, [], f"The server did not respond within "
-                               f"{LISTING_TIMEOUT:g} seconds, so the files in this folder "
-                               "could not be listed.")
+            self._files_loaded(live["gen"], live["folder"], [], "The server did not respond "
+                               f"for {LISTING_TIMEOUT:g} seconds, so the files in this folder "
+                               "could not be listed.", final=False)
 
-        def _files_loaded(self, gen, folder, rows, err, token=None):
+        def _files_loaded(self, gen, folder, rows, err, token=None, final=True):
             if token is not None:
                 if token in self.file_abandoned:         # a late answer after the timeout
                     self.file_abandoned.discard(token)
@@ -1599,6 +1616,8 @@ def run_gui(preload=None, on_ready=None):
                                       self.sort_var.get())
             self.file_cache[folder] = (rows, 0)
             self._show_file_page(folder)
+            if not final:         # a timeout is not an answer: opening the folder again retries
+                self.file_cache.pop(folder, None)
 
         def _show_file_page(self, folder):
             rows, shown = self.file_cache[folder]
