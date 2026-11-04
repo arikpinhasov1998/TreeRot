@@ -1574,7 +1574,14 @@ def run_gui(preload=None, on_ready=None):
                 except Exception as e:
                     rows, err = [], f"The files in this folder could not be listed. {e}"
                 self.q.put(("files", gen, folder, rows, err, token))
-            threading.Thread(target=work, daemon=True).start()
+            try:
+                threading.Thread(target=work, daemon=True).start()
+            except Exception as e:    # no thread could be started: undo, show why
+                del self.file_live[token]
+                self.file_active -= 1
+                self._files_loaded(gen, folder, [], "The files in this folder could not be "
+                                   f"listed: no worker could be started ({e}).", final=False)
+                return
             self.after(int(LISTING_TIMEOUT * 1000), lambda: self._listing_timeout(token))
 
         def _listing_timeout(self, token):

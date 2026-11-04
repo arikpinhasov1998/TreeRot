@@ -761,6 +761,41 @@ class FilesInTree(GuiCase):
             self.assertEqual(results["rows"], ["one.txt"])
             self.assertFalse(results["err_after"])
 
+    def test_a_thread_that_cannot_start_is_rolled_back_with_an_error_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD})
+            a = os.path.join(d, "a")
+            results = {}
+
+            class NoThread:
+                def __init__(self, *args, **kw):
+                    pass
+
+                def start(self):
+                    raise RuntimeError("can't start new thread")
+
+            def check(w):
+                w._populate(a)
+                with mock.patch.object(app.threading, "Thread", NoThread):
+                    w._load_files(a)
+                results["live"] = dict(w.file_live)
+                results["active"] = w.file_active
+                results["loading"] = a in w.file_loading
+                results["cached"] = a in w.file_cache
+                results["err"] = [f["reason"] for k, f in w.file_rows.items()
+                                  if k.startswith(app.FILEERR_IID)]
+                results["more_text"] = (w.tree.item(app.MORE_IID + a, "text")
+                                        if w.tree.exists(app.MORE_IID + a) else None)
+                self.done = True
+            self.run_case(d, check)
+            self.assertEqual(results["live"], {})
+            self.assertEqual(results["active"], 0)
+            self.assertFalse(results["loading"])
+            self.assertFalse(results["cached"])
+            self.assertEqual(len(results["err"]), 1)
+            self.assertIn("no worker could be started", results["err"][0])
+            self.assertIsNone(results["more_text"])
+
 
 def app_messagebox():
     from tkinter import messagebox
