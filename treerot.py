@@ -2365,6 +2365,19 @@ def _kill_tree(proc):
         pass
 
 
+def _tree_alive(proc):
+    """True while the browser or anything it started is still running."""
+    if proc.poll() is None:
+        return True
+    if sys.platform == "win32":
+        return False
+    try:
+        os.killpg(proc.pid, 0)       # signal 0 only asks whether the group has any member
+        return True
+    except OSError:
+        return False
+
+
 def _run_browser(cmd, pdf_path, timeout, cancel_event):
     """Returns ("ok" | "exit" | "timeout", detail). Raises ReportCanceled. Never leaves it running."""
     if cancel_event is not None and cancel_event.is_set():
@@ -2379,10 +2392,10 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     raise ReportCanceled("The PDF was canceled.")
-                done = proc.poll() is not None
+                alive = _tree_alive(proc)      # a launcher may exit while its child prints
                 if _pdf_ready(pdf_path):
                     return "ok", ""
-                if done:
+                if not alive:
                     err.seek(0)
                     return "exit", err.read().decode("utf-8", "replace").strip()[-300:]
                 if time.monotonic() > deadline:

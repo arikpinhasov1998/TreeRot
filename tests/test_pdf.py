@@ -25,6 +25,10 @@ SCRIPTS = {
     "good_then_hang": OUT + f"open(out, 'wb').write({GOOD!r})\nimport time\ntime.sleep(300)\n",
     "hang_child": OUT + CHILD + "import time\ntime.sleep(300)\n",
     "good_child_hang": OUT + CHILD + f"open(out, 'wb').write({GOOD!r})\nimport time\ntime.sleep(300)\n",
+    # a launcher that hands the work to a child and exits at once; the child writes the PDF later
+    "fork_launcher": OUT + ("import subprocess\ncode = " + repr(
+        f"import time,sys; time.sleep(1.5); open(sys.argv[1], 'wb').write({GOOD!r})") +
+        "\nsubprocess.Popen([sys.executable, '-c', code, out])\n"),
     "child_then_exit": OUT + CHILD + "sys.exit(1)\n",
 }
 META = {"root": "x", "excludes": [], "excluded_count": 0, "scanned_at": "now", "elapsed": 1,
@@ -118,6 +122,19 @@ class Pdf(unittest.TestCase):
     def test_finished_pdf_kept_when_browser_never_exits(self):
         self.write([self.browser("good_then_hang")])
         self.assertTrue(os.path.exists(self.out))
+
+    def test_launcher_that_exits_while_its_child_prints_is_waited_for(self):
+        t = time.monotonic()
+        self.write([self.browser("fork_launcher")], timeout=20)
+        self.assertEqual(open(self.out, "rb").read(5), b"%PDF-")
+        self.assertGreater(time.monotonic() - t, 1.4)
+        self.assertEqual(leftovers(self.d), [])
+
+    def test_a_browser_that_fails_with_nothing_left_fails_fast(self):
+        t = time.monotonic()
+        with self.assertRaises(app.ReportError):
+            self.write([self.browser("fail")], timeout=30)
+        self.assertLess(time.monotonic() - t, 5)
 
     def test_failure_names_each_browser_and_html(self):
         hang, fail = self.browser("hang"), self.browser("fail")
