@@ -1279,6 +1279,10 @@ def run_gui(preload=None, on_ready=None):
                 self.path_var.set(d)
 
         def _start(self):
+            if self._report_thread is not None and self._report_thread.is_alive():
+                messagebox.showinfo("Report in progress",
+                                    "Wait for the report to finish, or cancel it, before scanning.")
+                return
             root = self.path_var.get().strip().strip(QUOTE)
             if not root or not os.path.isdir(root):
                 messagebox.showerror("Invalid path",
@@ -1300,10 +1304,6 @@ def run_gui(preload=None, on_ready=None):
             lo = d_from.timestamp() if d_from else None
             hi = d_to.timestamp() if d_to else None
 
-            if self._report_thread is not None and self._report_thread.is_alive():
-                messagebox.showinfo("Report in progress",
-                                    "Wait for the report to finish, or cancel it, before scanning.")
-                return
             self.cancel_event.clear()
             self.rows = []
             self.tree.delete(*self.tree.get_children())

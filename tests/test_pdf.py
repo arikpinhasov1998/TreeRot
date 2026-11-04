@@ -270,3 +270,34 @@ class WindowClose(GuiCase):
             self.assertEqual(seen["report_btn"], "normal")
             self.assertFalse(os.path.exists(out))
             self.assertEqual(leftovers(d), [])
+
+
+@unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper")
+class ScanDuringExport(GuiCase):
+    def test_scan_is_refused_during_an_export_and_changes_nothing(self):
+        from tkinter import messagebox
+        with tempfile.TemporaryDirectory() as d:
+            share = os.path.join(d, "share")
+            make_tree(share, {"a/f.txt": OLD})
+            out = os.path.join(d, "r.pdf")
+            browser = make_browser(d, "hang")
+            seen = {}
+
+            def check(w):
+                before = w.period_text
+                with mock.patch("tkinter.filedialog.asksaveasfilename", return_value=out):
+                    w._save_report("pdf", "2", None)
+                w.from_var.set("2020-01-01")
+                with mock.patch.object(messagebox, "showinfo") as info:
+                    w._start()
+                seen["info"] = info.called
+                seen["same"] = w.period_text == before
+                seen["rows"] = bool(w.rows)
+                w._cancel()
+                when(w, lambda: "canceled" in w.status_var.get(), lambda: seen.update(done=1))
+
+            with mock.patch.object(app, "find_browsers", return_value=[browser]):
+                self.drive(share, check, finished=lambda: "done" in seen)
+            self.assertTrue(seen["info"])
+            self.assertTrue(seen["same"])
+            self.assertTrue(seen["rows"])
