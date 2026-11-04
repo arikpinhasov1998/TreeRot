@@ -893,6 +893,7 @@ def run_gui(preload=None, on_ready=None):
             self.file_queue = []      # folders waiting for one of the listing slots
             self.file_active = 0      # responsive listings running (at most FILE_THREADS)
             self.file_token = 0
+            self._press_row = None    # row under the mouse button when it went down
             self.file_live = {}       # token -> (generation, folder) of a listing holding a slot
             self.file_abandoned = set()   # tokens of listings that timed out, thread still blocked
             self.scan_ctx = None      # dates and rules of the scan, for listing files live
@@ -1113,6 +1114,7 @@ def run_gui(preload=None, on_ready=None):
             self.tree.bind("<<TreeviewOpen>>", self._on_open)
             self.tree.bind("<<TreeviewClose>>", self._on_close_node)
             self.tree.bind("<<TreeviewSelect>>", self._on_select)
+            self.tree.bind("<ButtonPress-1>", self._on_press, add="+")
             self.tree.bind("<ButtonRelease-1>", self._on_click, add="+")
             self.tree.bind("<Return>", self._on_activate_key, add="+")
             self.tree.bind("<space>", self._on_activate_key, add="+")
@@ -1843,9 +1845,12 @@ def run_gui(preload=None, on_ready=None):
             else:
                 self._load_files(folder)
 
+        def _on_press(self, e):
+            self._press_row = self.tree.identify_row(e.y)
+
         def _on_click(self, e):
             iid = self.tree.identify_row(e.y)
-            if iid.startswith(MORE_IID):
+            if iid.startswith(MORE_IID) and iid == self._press_row:
                 self._activate_more(iid)
 
         def _on_activate_key(self, _e):

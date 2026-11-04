@@ -362,6 +362,7 @@ class FilesInTree(GuiCase):
                 more = app.MORE_IID + big
                 w.tree.identify_row = lambda y: more
                 w.tree.selection_set(more)
+                w._on_press(mock.Mock(y=1))
                 w._on_click(mock.Mock(y=1))                 # a mouse click loads page 1
 
                 def page1():
@@ -617,6 +618,29 @@ class FilesInTree(GuiCase):
             self.assertEqual(results["sel"], (results["files"][0],))
             self.assertEqual(results["focus"], results["files"][0])
             self.assertEqual(results["after_retry"], 10)
+
+    def test_release_on_more_loads_only_if_the_press_was_on_the_same_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"big/f%d.txt" % n: OLD for n in range(3)})
+            big = os.path.join(d, "big")
+            results = {}
+
+            def check(w):
+                w._populate(big)
+                more = app.MORE_IID + big
+                rows = {"press": big, "release": more}
+                w.tree.identify_row = lambda y: rows["press"] if y == 1 else rows["release"]
+                w._on_press(mock.Mock(y=1))             # pressed on the folder row...
+                w._on_click(mock.Mock(y=2))             # ...and released on the MORE row
+                results["dragged"] = big in w.file_loading or big in w.file_cache
+                rows["press"] = more
+                w._on_press(mock.Mock(y=1))             # pressed and released on MORE
+                w._on_click(mock.Mock(y=2))
+                results["clicked"] = big in w.file_loading or big in w.file_cache
+                self.done = True
+            self.run_case(d, check)
+            self.assertFalse(results["dragged"])
+            self.assertTrue(results["clicked"])
 
 
 def app_messagebox():
