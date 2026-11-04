@@ -831,10 +831,12 @@ def write_csv(path, rows):
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
 def file_manager_command(path, is_file, platform):
-    """argv that shows path in the file manager. A file is only revealed, never run.
+    """Command that shows path in the file manager. A file is only revealed, never run.
+    An argv list, except a Windows file: one prebuilt string, because list quoting would wrap
+    the whole /select switch in quotes and Explorer would ignore it (run without a shell).
     None means: use os.startfile (a folder on Windows)."""
     if platform.startswith("win"):
-        return ["explorer", "/select," + path] if is_file else None
+        return f'explorer /select,"{path}"' if is_file else None
     if platform == "darwin":
         return ["open", "-R", path] if is_file else ["open", path]
     return ["xdg-open", os.path.dirname(path) if is_file else path]
