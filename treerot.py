@@ -813,7 +813,7 @@ def run_gui(preload=None, on_ready=None):
                 self.ex_list.insert("end", ex)
             self.protocol("WM_DELETE_WINDOW", self._on_close)
             self._clear_summary()
-            self.after(100, self._poll)
+            self._poll_job = self.after(100, self._poll)
 
         # ---- UI construction
         def _build_ui(self):
@@ -959,7 +959,7 @@ def run_gui(preload=None, on_ready=None):
             ttk.Button(opt3, text="Collapse all", command=self._collapse_all
                        ).pack(side="left")
             ttk.Label(opt3, text="Show levels:").pack(side="left", padx=(14, 4))
-            self.levels_var = tk.StringVar(value="1")
+            self.levels_var = tk.StringVar(value="")
             self.levels_cb = ttk.Combobox(opt3, textvariable=self.levels_var, state="readonly",
                                           width=10, values=["1", "2", "3", "4", "5", "Unlimited"])
             self.levels_cb.pack(side="left")
@@ -1016,6 +1016,7 @@ def run_gui(preload=None, on_ready=None):
             for b in ("<ButtonPress>", "<MouseWheel>", "<Button-4>", "<Button-5>", "<KeyPress>"):
                 self.tree.bind(b, self._tip_leave, add="+")
             self.tree.bind("<<TreeviewOpen>>", self._on_open)
+            self.tree.bind("<<TreeviewClose>>", self._on_close_node)
             self.tree.bind("<<TreeviewSelect>>", self._on_select)
             for b in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
                 self.tree.bind(b, self._context_menu)
@@ -1136,6 +1137,13 @@ def run_gui(preload=None, on_ready=None):
                 "count_created": bool(self.created_var.get()),
             })
             save_settings(self.settings)
+
+        def destroy(self):
+            try:                         # no stray callback may fire into a dead interpreter
+                self.after_cancel(self._poll_job)
+            except (tk.TclError, AttributeError):
+                pass
+            super().destroy()
 
         def _on_close(self):
             try:
@@ -1312,7 +1320,7 @@ def run_gui(preload=None, on_ready=None):
                         messagebox.showerror("Scan failed", msg[1])
             except queue.Empty:
                 pass
-            self.after(100, self._poll)
+            self._poll_job = self.after(100, self._poll)
 
         # ---- data helpers
         def _load_rows(self, rows):
@@ -1389,11 +1397,16 @@ def run_gui(preload=None, on_ready=None):
                     self._insert(iid, r)
 
         def _on_open(self, _e):
+            self.levels_var.set("")          # a manual open no longer matches a chosen level
             iid = self.tree.focus()
             if iid:
                 self._populate(iid)
 
+        def _on_close_node(self, _e):
+            self.levels_var.set("")
+
         def _refresh_tree(self):
+            self.levels_var.set("")
             self.tree.delete(*self.tree.get_children())
             if not self.rows:
                 return
@@ -1438,14 +1451,17 @@ def run_gui(preload=None, on_ready=None):
             self.summary_var.set(t)
 
         # ---- expand / collapse
-        def _expand_all(self):
+        def _expand_all(self, _keep=False):
+            """Returns False when the user declined the large-tree prompt."""
             if not self.rows:
-                return
+                return False
             total = len(self.visible) if self.visible is not None else len(self.rows)
             if total > 20000 and not messagebox.askyesno(
                     "Large tree", f"This opens all {total:,} folders, which can take a while. "
                     "Continue?"):
-                return
+                return False
+            if not _keep:
+                self.levels_var.set("")
             self.config(cursor="watch")
             self.update_idletasks()
             stack = [self.root_path]
@@ -1456,34 +1472,60 @@ def run_gui(preload=None, on_ready=None):
                 stack.extend(c for c in self.tree.get_children(iid)
                              if not c.endswith(DUMMY))
             self.config(cursor="")
+            return True
 
-        def _collapse_all(self):
+        def _collapse_all(self, _keep=False):
             if self.rows:
+                if not _keep:
+                    self.levels_var.set("")
                 for iid in self.tree.get_children(""):
                     self._close_rec(iid)
                 self.tree.item(self.root_path, open=True)
 
-        def _show_levels(self, value):
-            """Opens the tree to the chosen depth. Display only: the scan has read everything."""
-            if not self.rows:
-                return
-            if value == "Unlimited":
-                self._expand_all()
-                return
-            limit = int(value)
-            self._collapse_all()
-            self.config(cursor="watch")
-            self.update_idletasks()
-            stack = [(self.root_path, 0)]
+        def _count_to_level(self, limit):
+            """How many folders the tree shows when opened to this level (root included)."""
+            n, stack = 1, [(self.root_path, 0)]
             while stack:
                 iid, depth = stack.pop()
                 if depth >= limit:
                     continue
-                self._populate(iid)
-                self.tree.item(iid, open=True)
-                stack.extend((c, depth + 1) for c in self.tree.get_children(iid)
-                             if c in self.by_path)
-            self.config(cursor="")
+                kids = [r["info"].path for r in self._sorted_children(iid)]
+                n += len(kids)
+                stack.extend((k, depth + 1) for k in kids)
+            return n
+
+        def _show_levels(self, value):
+            """Opens the tree to the chosen depth. Display only: the scan has read everything.
+            The combobox is blanked when nothing was changed or the user declined."""
+            if not self.rows:
+                return
+            if value == "Unlimited":
+                if not self._expand_all(_keep=True):
+                    self.levels_var.set("")
+                return
+            limit = int(value)
+            total = self._count_to_level(limit)
+            if total > 20000 and not messagebox.askyesno(
+                    "Large tree", f"This opens {total:,} folders, which can take a while. "
+                    "Continue?"):
+                self.levels_var.set("")
+                return
+            self._collapse_all(_keep=True)
+            self.config(cursor="watch")
+            try:
+                self.update_idletasks()
+                stack = [(self.root_path, 0)]
+                while stack:
+                    iid, depth = stack.pop()
+                    if depth >= limit:
+                        continue
+                    self._populate(iid)
+                    self.tree.item(iid, open=True)
+                    stack.extend((c, depth + 1) for c in self.tree.get_children(iid)
+                                 if c in self.by_path)
+            finally:
+                self.config(cursor="")
+            self.levels_var.set(value)
 
         def _close_rec(self, iid):
             for c in self.tree.get_children(iid):
@@ -1492,6 +1534,7 @@ def run_gui(preload=None, on_ready=None):
             self.tree.item(iid, open=False)
 
         def _expand_to_red(self):
+            self.levels_var.set("")
             """Open every green/gray ancestor so each top-level red folder is visible."""
             if not self.rows:
                 return
@@ -2456,7 +2499,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
     return visible ? kids[i].filter(function (c) { return visible.has(c); }) : kids[i];
   }
   function setFilter(f) {
-    filter = f;
+    filter = f; levelsStale();
     document.querySelector('input[name=show][value="' + f + '"]').checked = true;
     if (f === "all") { visible = null; return; }
     visible = new Set();
@@ -2515,7 +2558,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   function rowEl(i) { return tbody.querySelector('tr[data-i="' + i + '"]'); }
   function showInTree(i) {
     if (visible && !visible.has(i)) setFilter("all");
-    openAncestors(i); render();
+    levelsStale(); openAncestors(i); render();
     var tr = rowEl(i);
     if (tr) {
       tr.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -2529,6 +2572,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
     var b = e.target.closest(".tg");
     if (!b) return;
     var i = +b.dataset.i;
+    levelsStale();
     if (open.has(i)) open.delete(i); else open.add(i);
     render();
     var nb = rowEl(i) && rowEl(i).querySelector(".tg");
@@ -2542,14 +2586,14 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   });
   document.getElementById("sort").addEventListener("change", function (e) { sortKids(e.target.value); render(); });
   document.getElementById("collapse").addEventListener("click", function () {
-    open = new Set([0]); render(); note.textContent = "";
+    levelsStale(); open = new Set([0]); render(); note.textContent = "";
   });
   document.getElementById("expand").addEventListener("click", function () {
     var total = visible ? visible.size : N;
     if (total > 20000 && !window.confirm("This opens all " + nf(total) +
         " folders, which can make the page slow for a while. Continue?")) return;
     var q = [0], head = 0;
-    open = new Set();
+    levelsStale(); open = new Set();
     while (head < q.length) {
       var i = q[head++], ks = visKids(i);
       if (!ks.length) continue;
@@ -2559,8 +2603,10 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
     render();
     note.textContent = "All " + nf(total) + " folders are open.";
   });
+  var levelSel = document.getElementById("levels");
+  function levelsStale() { if (levelSel) levelSel.value = ""; }
   (function () {
-    var sel = document.getElementById("levels"), deepest = 0, q = [[0, 0]], head = 0;
+    var sel = levelSel, deepest = 0, q = [[0, 0]], head = 0;
     while (head < q.length) {
       var it = q[head++], ks = visKids(it[0]);
       if (it[1] > deepest) deepest = it[1];
@@ -2575,21 +2621,33 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
     u.value = "all"; u.textContent = "Unlimited";
     sel.appendChild(u);
     sel.addEventListener("change", function () {
-      if (sel.value === "all") { document.getElementById("expand").click(); return; }
+      if (sel.value === "all") {
+        var chosen = open;
+        document.getElementById("expand").click();
+        if (open === chosen) sel.value = "";      // the prompt was cancelled
+        else sel.value = "all";
+        return;
+      }
       if (!sel.value) return;
-      var limit = +sel.value, st = [[0, 0]], h = 0;
-      open = new Set();
+      var limit = +sel.value, st = [[0, 0]], h = 0, next = new Set();
       while (h < st.length) {
         var x = st[h++], kids = visKids(x[0]);
         if (x[1] >= limit || !kids.length) continue;
-        open.add(x[0]);
+        next.add(x[0]);
         for (var j = 0; j < kids.length; j++) st.push([kids[j], x[1] + 1]);
       }
+      var shown = st.length;
+      if (shown > 20000 && !window.confirm("This opens about " + nf(shown) +
+          " folders, which can make the page slow for a while. Continue?")) {
+        sel.value = ""; return;
+      }
+      open = next;
       render();
       note.textContent = "Showing " + limit + " level" + (limit === 1 ? "" : "s") + ".";
     });
   })();
   document.getElementById("to-unused").addEventListener("click", function () {
+    levelsStale();
     if (filter === "g" || filter === "x") setFilter("all");
     var first = null, n = 0;
     for (var i = 0; i < N; i++) {
@@ -2603,6 +2661,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   });
   document.getElementById("find").addEventListener("submit", function () {
     var q = document.getElementById("q").value.trim().toLowerCase();
+    levelsStale();
     hits = new Set();
     if (!q) { render(); note.textContent = ""; return; }
     var byPath = q.indexOf("/") >= 0 || q.indexOf("\\") >= 0, found = [];

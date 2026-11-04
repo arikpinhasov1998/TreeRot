@@ -37,3 +37,5 @@ class Levels(unittest.TestCase):
                 html = f.read()
         self.assertIn('id="levels"', html)
         self.assertIn("Unlimited", html)
+        self.assertIn("function levelsStale", html)   # selection resets when the tree changes
+        self.assertIn("window.confirm", html)
