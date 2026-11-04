@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Linux or macOS program into dist/release/
-#   Linux:  treerot-linux-<arch>.tar.gz   (one program: window and command line)
-#   macOS:  TreeRot-macos-<arch>.zip        (TreeRot.app + command line)
+#   Linux:  treerot-linux-<arch>.tar.gz  (one program: window and command line)
+#   macOS:  TreeRot-macos-<arch>.zip     (TreeRot.app + command line)
 # On Windows use build_exe.bat instead.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -41,12 +41,14 @@ case "$(uname -s)" in
     "$VPY" -m PyInstaller --noconfirm --clean --windowed --onedir $ICON_ARGS \
       --name TreeRot --osx-bundle-identifier io.github.arikpinhasov1998.treerot \
       treerot.py
+    # The CLI gets its own folders: on case-insensitive disks "treerot" and "TreeRot" are the same name.
     "$VPY" -m PyInstaller --noconfirm --onefile \
+      --distpath dist/cli --workpath build/cli --specpath build/cli \
       --name treerot treerot.py
     rm -rf dist/pkg
     mkdir -p dist/pkg/TreeRot
     ditto dist/TreeRot.app dist/pkg/TreeRot/TreeRot.app
-    cp dist/treerot dist/pkg/TreeRot/
+    cp dist/cli/treerot dist/pkg/TreeRot/
     # ditto keeps the app bundle intact (a plain zip can break it)
     ditto -c -k --keepParent dist/pkg/TreeRot \
       "dist/release/TreeRot-macos-$ARCH.zip"
