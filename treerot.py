@@ -830,7 +830,7 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
-FILE_IID, MORE_IID = "file::", "more::"
+FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 
 
 def gui_unavailable(reason):
@@ -1330,75 +1330,86 @@ def run_gui(preload=None, on_ready=None):
         def _poll(self):
             try:
                 while True:
-                    msg = self.q.get_nowait()
-                    if msg[0] == "progress":
-                        p = msg[1]
-                        v = self.meter.update(p)
-                        pct, counts, times = progress_parts(p, v, "  \u00b7  ")
-                        if p["phase"] == "count":
-                            if str(self.prog_bar.cget("mode")) != "indeterminate":
-                                self.prog_bar.config(mode="indeterminate")
-                                self.prog_bar.start(15)
-                        else:
-                            if str(self.prog_bar.cget("mode")) != "determinate":
-                                self.prog_bar.stop()
-                                self.prog_bar.config(mode="determinate")
-                            self.prog_bar["value"] = v["fraction"] * 100
-                        self.prog_pct_var.set(pct)
-                        self.prog_var.set(f"{counts}     {times}")
-                        cur = p.get("current") or ""
-                        cur = (cur[:100] + "...") if len(cur) > 103 else cur
-                        self.status_var.set(
-                            ("Counting: " if p["phase"] == "count" else "Scanning: ") + cur)
-                    elif msg[0] == "done":
-                        _, rows, cutoff, canceled, n_excl = msg
-                        self.scan_elapsed = time.monotonic() - self.t0
-                        self.n_excluded = n_excl
+                    try:
+                        msg = self.q.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        self._handle_msg(msg)
+                    except Exception as e:      # one bad message must not stop the polling
+                        try:
+                            self.status_var.set(f"Unexpected error: {e}")
+                        except Exception:
+                            pass
+            finally:
+                self._poll_job = self.after(100, self._poll)
+
+        def _handle_msg(self, msg):
+            if msg[0] == "progress":
+                p = msg[1]
+                v = self.meter.update(p)
+                pct, counts, times = progress_parts(p, v, "  \u00b7  ")
+                if p["phase"] == "count":
+                    if str(self.prog_bar.cget("mode")) != "indeterminate":
+                        self.prog_bar.config(mode="indeterminate")
+                        self.prog_bar.start(15)
+                else:
+                    if str(self.prog_bar.cget("mode")) != "determinate":
                         self.prog_bar.stop()
-                        self.prog_bar.config(mode="determinate",
-                                             value=self.prog_bar["value"] if canceled else 100)
-                        self.prog_pct_var.set("canceled" if canceled else "100%")
-                        last = (self.meter.last if self.meter else None) or {}
-                        self.prog_var.set(
-                            f"{'Canceled' if canceled else 'Finished'} in "
-                            f"{fmt_duration(self.scan_elapsed)}  \u00b7  "
-                            f"{last.get('folders', 0):,} folders  \u00b7  "
-                            f"{last.get('files', 0):,} files  \u00b7  "
-                            f"{fmt_size(last.get('bytes', 0))} read")
-                        self._load_rows(rows)
-                        if rows and not canceled:
-                            remember_totals(self.settings, self._totals_key, len(rows),
-                                            self.by_path[self.root_path]["info"].total_files)
-                            self._save_settings()
-                        self.cutoff = cutoff
-                        self.scan_btn.config(state="normal")
-                        self.cancel_btn.config(state="disabled")
-                        self.export_btn.config(state="normal" if rows else "disabled")
-                        self.report_btn.config(state="normal" if rows else "disabled")
-                        self.scan_meta.update(elapsed=self.scan_elapsed, canceled=bool(canceled),
-                                              excluded_count=n_excl)
-                        self._refresh_tree()
-                        el = time.monotonic() - self.t0
-                        tag = "CANCELED (partial results). " if canceled else "Done. "
-                        n_bad = sum(1 for r in rows if r["info"].unreadable)
-                        bad = (f" | {n_bad:,} folder(s) could NOT be opened (see gray rows)"
-                               if n_bad else "")
-                        self.status_var.set(
-                            f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
-                            f"{n_excl:,} folder(s) excluded | period: {cutoff}")
-                    elif msg[0] == "files":
-                        self._files_loaded(msg[1], msg[2], msg[3], msg[4])
-                    elif msg[0] == "report_done":
-                        self._report_done(msg[1], msg[2])
-                    elif msg[0] == "error":
-                        self.prog_bar.stop()
-                        self.prog_var.set("Scan failed.")
-                        self.scan_btn.config(state="normal")
-                        self.cancel_btn.config(state="disabled")
-                        messagebox.showerror("Scan failed", msg[1])
-            except queue.Empty:
-                pass
-            self._poll_job = self.after(100, self._poll)
+                        self.prog_bar.config(mode="determinate")
+                    self.prog_bar["value"] = v["fraction"] * 100
+                self.prog_pct_var.set(pct)
+                self.prog_var.set(f"{counts}     {times}")
+                cur = p.get("current") or ""
+                cur = (cur[:100] + "...") if len(cur) > 103 else cur
+                self.status_var.set(
+                    ("Counting: " if p["phase"] == "count" else "Scanning: ") + cur)
+            elif msg[0] == "done":
+                _, rows, cutoff, canceled, n_excl = msg
+                self.scan_elapsed = time.monotonic() - self.t0
+                self.n_excluded = n_excl
+                self.prog_bar.stop()
+                self.prog_bar.config(mode="determinate",
+                                     value=self.prog_bar["value"] if canceled else 100)
+                self.prog_pct_var.set("canceled" if canceled else "100%")
+                last = (self.meter.last if self.meter else None) or {}
+                self.prog_var.set(
+                    f"{'Canceled' if canceled else 'Finished'} in "
+                    f"{fmt_duration(self.scan_elapsed)}  \u00b7  "
+                    f"{last.get('folders', 0):,} folders  \u00b7  "
+                    f"{last.get('files', 0):,} files  \u00b7  "
+                    f"{fmt_size(last.get('bytes', 0))} read")
+                self._load_rows(rows)
+                if rows and not canceled:
+                    remember_totals(self.settings, self._totals_key, len(rows),
+                                    self.by_path[self.root_path]["info"].total_files)
+                    self._save_settings()
+                self.cutoff = cutoff
+                self.scan_btn.config(state="normal")
+                self.cancel_btn.config(state="disabled")
+                self.export_btn.config(state="normal" if rows else "disabled")
+                self.report_btn.config(state="normal" if rows else "disabled")
+                self.scan_meta.update(elapsed=self.scan_elapsed, canceled=bool(canceled),
+                                      excluded_count=n_excl)
+                self._refresh_tree()
+                el = time.monotonic() - self.t0
+                tag = "CANCELED (partial results). " if canceled else "Done. "
+                n_bad = sum(1 for r in rows if r["info"].unreadable)
+                bad = (f" | {n_bad:,} folder(s) could NOT be opened (see gray rows)"
+                       if n_bad else "")
+                self.status_var.set(
+                    f"{tag}{len(rows):,} folders in {el:.1f}s{bad} | "
+                    f"{n_excl:,} folder(s) excluded | period: {cutoff}")
+            elif msg[0] == "files":
+                self._files_loaded(msg[1], msg[2], msg[3], msg[4])
+            elif msg[0] == "report_done":
+                self._report_done(msg[1], msg[2])
+            elif msg[0] == "error":
+                self.prog_bar.stop()
+                self.prog_var.set("Scan failed.")
+                self.scan_btn.config(state="normal")
+                self.cancel_btn.config(state="disabled")
+                messagebox.showerror("Scan failed", msg[1])
 
         # ---- data helpers
         def _load_rows(self, rows):
@@ -1494,8 +1505,11 @@ def run_gui(preload=None, on_ready=None):
             gen, ctx, period = self.file_gen, self.scan_ctx, self.period_text
 
             def work():
-                rows, err = list_folder_files(folder, ctx["lo"], ctx["hi"], ctx["created"],
-                                              ctx["activity"], period)
+                try:
+                    rows, err = list_folder_files(folder, ctx["lo"], ctx["hi"], ctx["created"],
+                                                  ctx["activity"], period)
+                except Exception as e:
+                    rows, err = [], f"The files in this folder could not be listed. {e}"
                 self.q.put(("files", gen, folder, rows, err))
             threading.Thread(target=work, daemon=True).start()
 
@@ -1507,7 +1521,8 @@ def run_gui(preload=None, on_ready=None):
                 return
             if err:
                 rows = [{"path": folder, "name": "Files could not be listed", "size": None,
-                         "mtime": None, "created": None, "color": GRAY, "reason": err}]
+                         "mtime": None, "created": None, "color": GRAY, "reason": err,
+                         "iid": FILEERR_IID + folder}]
             rows = sort_file_rows(filter_file_rows(rows, self.filter_var.get()),
                                   self.sort_var.get())
             self.file_cache[folder] = (rows, 0)
@@ -1519,7 +1534,7 @@ def run_gui(preload=None, on_ready=None):
             if self.tree.exists(more):
                 self.tree.delete(more)
             for f in rows[shown:shown + FILE_PAGE]:
-                iid = FILE_IID + f["path"]
+                iid = f.get("iid") or FILE_IID + f["path"]
                 self.file_rows[iid] = f
                 self.tree.insert(folder, "end", iid=iid, text=f["name"], tags=(f["color"],),
                                  values=(fmt_ts(_file_activity(f) or None), "",

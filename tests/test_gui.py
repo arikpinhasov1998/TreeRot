@@ -1,3 +1,4 @@
+import gc
 import os
 import subprocess
 import sys
@@ -51,6 +52,7 @@ class GuiCase(unittest.TestCase):
                 w.after(1000, close)
             w.after(200, wait)
         app.run_gui(on_ready=ready)
+        gc.collect()      # free the closed window's Tk variables on the main thread, not in a worker
         if errors:
             raise errors[0]
 
@@ -118,12 +120,13 @@ class FilesInTree(GuiCase):
         self.async_errors = []
         self.done = False
 
-    def wait_files(self, w, folder, then, tries=400):
+    def wait_files(self, w, folder, then, tries=400, done=True):
         def poll():
             try:
                 if folder in w.file_cache:
                     then()
-                    self.done = True
+                    if done:
+                        self.done = True
                 elif tries_left[0] <= 0:
                     raise AssertionError("files were never listed for " + folder)
                 else:
@@ -239,7 +242,7 @@ class FilesInTree(GuiCase):
                 w._load_files(gone)
 
                 def loaded():
-                    kids = [k for k in w.tree.get_children(gone) if k.startswith(app.FILE_IID)]
+                    kids = [k for k in w.tree.get_children(gone) if k.startswith(app.FILEERR_IID)]
                     results["kids"] = kids
                     results["color"] = w.file_rows[kids[0]]["color"]
                     results["text"] = w.tree.item(kids[0], "text")
@@ -250,6 +253,65 @@ class FilesInTree(GuiCase):
             self.assertEqual(results["color"], app.GRAY)
             self.assertEqual(results["text"], "Files could not be listed")
             self.assertIn("could not be listed", results["reason"])
+
+    def test_error_row_does_not_collide_with_a_file_row(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"p/keep.txt": OLD, "p/f/x.txt": OLD})
+            p, f = os.path.join(d, "p"), os.path.join(d, "p", "f")
+            results = {}
+
+            def check(w):
+                w._populate(p)
+                w._populate(f)
+                shutil.rmtree(f)
+                with open(f, "wb") as fh:          # the folder became a file
+                    fh.write(b"x")
+                w._load_files(p)
+
+                def p_loaded():
+                    w._load_files(f)
+                    self.wait_files(w, f, f_loaded)
+
+                def f_loaded():
+                    results["file_row"] = w.tree.exists(app.FILE_IID + f)
+                    results["err_row"] = w.tree.exists(app.FILEERR_IID + f)
+                    results["err_in_rows"] = (app.FILEERR_IID + f) in w.file_rows
+                    results["path"] = w._path_of(app.FILEERR_IID + f)
+                self.wait_files(w, p, p_loaded, done=False)
+            self.run_case(d, check)
+            self.assertTrue(results["file_row"])
+            self.assertTrue(results["err_row"])
+            self.assertTrue(results["err_in_rows"])
+            self.assertEqual(results["path"], f)
+
+    def test_poll_survives_an_unexpected_error_and_keeps_later_messages(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/one.txt": OLD})
+            results = {}
+
+            def check(w):
+                seen = []
+                orig = w._files_loaded
+
+                def boom(*a):
+                    seen.append(a[1])
+                    if len(seen) == 1:
+                        raise RuntimeError("boom")
+                    return orig(*a)
+                w._files_loaded = boom
+                w.q.put(("files", w.file_gen, "x", [], ""))
+                w.q.put(("files", w.file_gen, "y", [], ""))
+                job = w._poll_job
+                w._poll()
+                results["seen"] = len(seen)
+                results["status"] = w.status_var.get()
+                results["rescheduled"] = w._poll_job is not None and w._poll_job != job
+                self.done = True
+            self.run_case(d, check)
+            self.assertEqual(results["seen"], 2)
+            self.assertIn("boom", results["status"])
+            self.assertTrue(results["rescheduled"])
 
 
 def app_messagebox():
