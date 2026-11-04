@@ -57,6 +57,18 @@ def read_pid(path):
 
 
 def alive(pid):
+    if os.name == "nt":     # os.kill(pid, 0) would END the process on Windows
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        h = k32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = wintypes.DWORD()
+        ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+        k32.CloseHandle(h)
+        return bool(ok) and code.value == 259          # STILL_ACTIVE
     try:
         os.kill(pid, 0)
         return True
@@ -187,15 +199,60 @@ class Pdf(unittest.TestCase):
             self.assertIn("brave", names[-1], plat)
             self.assertTrue(any("edge" in n for n in names[:1]), plat)
 
+    # ---- Windows job objects, exercised here with fakes (the real calls only run on Windows)
+    def test_without_a_job_object_the_export_still_works(self):
+        class Boom:
+            def __init__(self):
+                raise OSError("no job")
+        with mock.patch.object(app.sys, "platform", "win32"), \
+                mock.patch.object(app, "_WinJob", Boom, create=True):
+            self.assertIsNone(app._attach_job(mock.Mock(pid=1)))
+
+    def test_job_structures_have_the_windows_sizes(self):
+        import ctypes
+        k = mock.MagicMock()
+        k.SetInformationJobObject.return_value = 1
+        with mock.patch.object(ctypes, "WinDLL", create=True, return_value=k):
+            job = app._WinJob()
+        self.assertEqual(k.SetInformationJobObject.call_args[0][3], 144)
+        self.assertEqual(ctypes.sizeof(job._Accounting), 48)
+
+    def test_job_counts_as_alive_after_the_launcher_exits(self):
+        job = mock.Mock()
+        job.active.return_value = 2
+        proc = mock.Mock(pid=1, job=job)
+        proc.poll.return_value = 0
+        with mock.patch.object(app.sys, "platform", "win32"):
+            self.assertTrue(app._tree_alive(proc))
+            job.active.return_value = 0
+            self.assertFalse(app._tree_alive(proc))
+
+    def test_kill_uses_the_job_and_closes_it(self):
+        job = mock.Mock()
+        proc = mock.Mock(pid=1, job=job)
+        proc.poll.return_value = 0
+        with mock.patch.object(app.sys, "platform", "win32"), \
+                mock.patch.object(app.subprocess, "run") as run:
+            app._kill_tree(proc)
+        job.terminate.assert_called_once()
+        job.close.assert_called_once()
+        run.assert_not_called()
+
+    def test_kill_falls_back_to_taskkill_without_a_job(self):
+        proc = mock.Mock(pid=77, job=None)
+        proc.poll.return_value = None
+        with mock.patch.object(app.sys, "platform", "win32"), \
+                mock.patch.object(app.subprocess, "run") as run:
+            app._kill_tree(proc)
+        self.assertIn("taskkill", run.call_args[0][0])
+
     # ---- the whole process tree ends, and the temporary folder goes, on every exit path
-    @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
     def test_timeout_ends_the_helper_process(self):
         with self.assertRaises(app.ReportError):
             self.write([self.browser("hang_child")], timeout=2)
         self.assertTrue(wait_dead(self.child_pid()))
         self.assertEqual(leftovers(self.d), [])
 
-    @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
     def test_cancel_ends_the_helper_process(self):
         ev = threading.Event()
         threading.Timer(1.0, ev.set).start()
@@ -204,14 +261,12 @@ class Pdf(unittest.TestCase):
         self.assertTrue(wait_dead(self.child_pid()))
         self.assertEqual(leftovers(self.d), [])
 
-    @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
     def test_success_ends_the_helper_process(self):
         self.write([self.browser("good_child_hang")])
         self.assertTrue(os.path.exists(self.out))
         self.assertTrue(wait_dead(self.child_pid()))
         self.assertEqual(leftovers(self.d), [])
 
-    @unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
     def test_helper_left_behind_by_a_failed_browser_is_ended(self):
         with self.assertRaises(app.ReportError):
             self.write([self.browser("child_then_exit")])
@@ -236,7 +291,6 @@ def when(w, cond, then, seconds=20):
     w.after(50, step)
 
 
-@unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper and os.kill")
 class WindowClose(GuiCase):
     def test_closing_the_window_during_an_export_ends_the_browser(self):
         with tempfile.TemporaryDirectory() as d:
@@ -302,7 +356,6 @@ class WindowClose(GuiCase):
             self.assertEqual(leftovers(d), [])
 
 
-@unittest.skipIf(os.name == "nt", "uses a POSIX shell wrapper")
 class ScanDuringExport(GuiCase):
     def test_scan_is_refused_during_an_export_and_changes_nothing(self):
         from tkinter import messagebox

@@ -2347,13 +2347,140 @@ def _pdf_ready(path):
         return False
 
 
+class _WinJob:
+    """A Windows Job Object that ends every process in it when closed (ctypes, stdlib only).
+    The browser and anything it starts are put in it, so no helper outlives the export.
+    NOTE: written for Windows and not run on other systems."""
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+        self._k = k = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._ct = ctypes
+        ULONG_PTR = ctypes.c_size_t
+
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                        ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", ctypes.c_uint32),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", ctypes.c_uint32),
+                        ("Affinity", ULONG_PTR),
+                        ("PriorityClass", ctypes.c_uint32),
+                        ("SchedulingClass", ctypes.c_uint32)]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in
+                        ("ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes",
+                         "OtherBytes")]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("Basic", Basic), ("Io", IoCounters),
+                        ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
+                        ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                        ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                        ("TotalPageFaultCount", ctypes.c_uint32),
+                        ("TotalProcesses", ctypes.c_uint32),
+                        ("ActiveProcesses", ctypes.c_uint32),
+                        ("TotalTerminatedProcesses", ctypes.c_uint32)]
+        self._Accounting = Accounting
+        k.CreateJobObjectW.restype = wintypes.HANDLE
+        k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                              wintypes.DWORD]
+        k.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                wintypes.DWORD, ctypes.c_void_p]
+        k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.handle = k.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise OSError("CreateJobObject failed")
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k.SetInformationJobObject(self.handle, 9, ctypes.byref(info),
+                                         ctypes.sizeof(info)):
+            self.close()
+            raise OSError("SetInformationJobObject failed")
+
+    def assign(self, proc):
+        if not self._k.AssignProcessToJobObject(self.handle, int(proc._handle)):
+            raise OSError("AssignProcessToJobObject failed")
+
+    def active(self):
+        """Number of processes still in the job, or None if it cannot be asked."""
+        info = self._Accounting()
+        if not self._k.QueryInformationJobObject(self.handle, 1, self._ct.byref(info),
+                                                 self._ct.sizeof(info), None):
+            return None
+        return info.ActiveProcesses
+
+    def terminate(self):
+        self._k.TerminateJobObject(self.handle, 1)
+
+    def close(self):
+        h, self.handle = self.handle, None
+        if h:
+            self._k.CloseHandle(h)
+
+
+def _attach_job(proc):
+    """Puts a just-started browser in a Job Object on Windows. None when that is not possible:
+    never a reason to stop the export (taskkill /T is the fallback)."""
+    if sys.platform != "win32":
+        return None
+    job = None
+    try:
+        job = _WinJob()
+        job.assign(proc)
+        return job
+    except Exception:
+        try:
+            if job is not None:
+                job.close()
+        except Exception:
+            pass
+        return None
+
+
+def _tree_alive(proc):
+    """True while the browser or anything it started is still running."""
+    if proc.poll() is None:
+        return True
+    if sys.platform == "win32":
+        job = getattr(proc, "job", None)
+        try:
+            return bool(job and job.active())
+        except Exception:
+            return False
+    try:
+        os.killpg(proc.pid, 0)       # signal 0 only asks whether the group has any member
+        return True
+    except OSError:
+        return False
+
+
 def _kill_tree(proc):
-    """Ends proc and everything it started. Only our own process group / tree, never by name."""
+    """Ends proc and everything it started. Only our own process group / job, never by name."""
+    job = getattr(proc, "job", None)
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=0x08000000, timeout=20)
+            if job is not None:
+                try:
+                    job.terminate()
+                except Exception:
+                    job = None
+            if job is None:          # no job: taskkill /T follows the tree while the parent lives
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000, timeout=20)
         else:
             os.killpg(proc.pid, 9)       # the browser was started as its own group leader
     except (OSError, subprocess.SubprocessError):
@@ -2363,19 +2490,11 @@ def _kill_tree(proc):
         proc.wait(timeout=5)
     except (OSError, subprocess.SubprocessError):
         pass
-
-
-def _tree_alive(proc):
-    """True while the browser or anything it started is still running."""
-    if proc.poll() is None:
-        return True
-    if sys.platform == "win32":
-        return False
-    try:
-        os.killpg(proc.pid, 0)       # signal 0 only asks whether the group has any member
-        return True
-    except OSError:
-        return False
+    if job is not None:
+        try:
+            job.close()
+        except Exception:
+            pass
 
 
 def _run_browser(cmd, pdf_path, timeout, cancel_event):
@@ -2387,6 +2506,7 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, creationflags=flags,
                                 **extra)
+        proc.job = _attach_job(proc)         # Windows only; None elsewhere or if it fails
         deadline = time.monotonic() + timeout
         try:
             while True:
