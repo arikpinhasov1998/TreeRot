@@ -2595,9 +2595,14 @@ def _run_browser(cmd, pdf_path, timeout, cancel_event):
                 alive = _tree_alive(proc)      # a launcher may exit while its child prints
                 if _pdf_ready(pdf_path):
                     return "ok", ""
-                if not alive:
+                gone = proc.poll() is not None
+                if not alive or (gone and time.monotonic() > deadline):
+                    # The browser itself exited without a PDF. A helper still holding on does
+                    # not make that a hang: report how it ended, and let the retry run.
                     err.seek(0)
-                    return "exit", err.read().decode("utf-8", "replace").strip()[-300:]
+                    text = err.read().decode("utf-8", "replace").strip()[-300:]
+                    return "exit", f"the browser exited with status {proc.returncode}" + (
+                        f": {text}" if text else "")
                 if time.monotonic() > deadline:
                     return "timeout", f"did not finish within {timeout} seconds"
                 time.sleep(0.25)

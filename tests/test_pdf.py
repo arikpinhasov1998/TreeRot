@@ -29,6 +29,10 @@ SCRIPTS = {
     "fork_launcher": OUT + ("import subprocess\ncode = " + repr(
         f"import time,sys; time.sleep(1.5); open(sys.argv[1], 'wb').write({GOOD!r})") +
         "\nsubprocess.Popen([sys.executable, '-c', code, out])\n"),
+    # fails with a message and exits, but leaves a helper running; logs each launch's headless flag
+    "fail_with_helper": OUT + CHILD + (
+        "open(os.environ['FAKE_LOG'], 'a').write([a for a in sys.argv if a.startswith('--headless')][0] + '\\n')\n"
+        "sys.stderr.write('boom from the browser')\nsys.exit(3)\n"),
     "child_then_exit": OUT + CHILD + "sys.exit(1)\n",
 }
 META = {"root": "x", "excludes": [], "excluded_count": 0, "scanned_at": "now", "elapsed": 1,
@@ -149,6 +153,24 @@ class Pdf(unittest.TestCase):
         self.assertEqual(open(self.out, "rb").read(5), b"%PDF-")
         self.assertGreater(time.monotonic() - t, 1.4)
         self.assertEqual(leftovers(self.d), [])
+
+    def test_browser_that_exits_with_an_error_but_leaves_a_helper_is_a_failure_not_a_hang(self):
+        log = os.path.join(self.d, "launches.log")
+        with mock.patch.dict(os.environ, {"FAKE_LOG": log}):
+            with self.assertRaises(app.ReportError) as c:
+                self.write([self.browser("fail_with_helper")], timeout=2)
+        msg = str(c.exception)
+        self.assertIn("boom from the browser", msg)
+        self.assertIn("3", msg)
+        self.assertNotIn("did not finish", msg)
+        with open(log) as f:
+            self.assertEqual(f.read().split(), ["--headless=new", "--headless"])   # retry ran
+        self.assertTrue(wait_dead(self.child_pid()))
+
+    def test_a_true_hang_keeps_the_did_not_finish_message(self):
+        with self.assertRaises(app.ReportError) as c:
+            self.write([self.browser("hang_child")], timeout=2)
+        self.assertIn("did not finish within 2 seconds", str(c.exception))
 
     def test_a_browser_that_fails_with_nothing_left_fails_fast(self):
         t = time.monotonic()
