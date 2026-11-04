@@ -704,6 +704,74 @@ def reason_text(r, folder_basis=False, with_path=False):
     return "\n".join(out)
 
 
+FILE_PAGE = 1000                      # files shown per "Show more" in the window
+
+
+def _in_period(ts, lo, hi):
+    return ts is not None and (lo is None or ts >= lo) and (hi is None or ts <= hi)
+
+
+def list_folder_files(path, lo, hi, created, activity, period):
+    """
+    Reads the files directly in one folder, as they are on disk now.
+    Returns (rows, error_text). Uses the same date rules as scan_tree and, like it,
+    skips symbolic links.
+    """
+    rows = []
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                row = {"path": entry.path, "name": entry.name, "size": None, "mtime": None,
+                       "created": None, "color": GRAY, "reason": ""}
+                try:
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        continue
+                    st = entry.stat(follow_symlinks=False)
+                except OSError as e:
+                    why = explain_os_error(e.errno, getattr(e, "winerror", None))
+                    row["reason"] = ("This file could not be read, so it cannot be judged. "
+                                     + (why or (e.strerror or str(e))))
+                    rows.append(row)
+                    continue
+                c = file_created(st, created)
+                row.update(size=st.st_size, mtime=st.st_mtime, created=c)
+                dates = f"Modified {fmt_ts(st.st_mtime)}"
+                if c is not None:
+                    dates += f", created {fmt_ts(c)}"
+                if _in_period(st.st_mtime, lo, hi) or _in_period(c, lo, hi):
+                    row["color"] = GREEN
+                    row["reason"] = f"This file was {activity} within the period ({period}). {dates}."
+                else:
+                    row["color"] = RED
+                    row["reason"] = f"This file was {activity} outside the period ({period}). {dates}."
+                rows.append(row)
+    except OSError as e:
+        why = explain_os_error(e.errno, getattr(e, "winerror", None))
+        return [], "The files in this folder could not be listed. " + (why or (e.strerror or str(e)))
+    return rows, ""
+
+
+def _file_activity(row):
+    return max(row["mtime"] or 0, row["created"] or 0)
+
+
+def sort_file_rows(rows, label):
+    if label.startswith("Size"):
+        return sorted(rows, key=lambda r: -(r["size"] or 0))
+    if label.startswith("Name"):
+        return sorted(rows, key=lambda r: r["name"].lower())
+    if "oldest" in label:
+        return sorted(rows, key=_file_activity)
+    return sorted(rows, key=lambda r: -_file_activity(r))
+
+
+def filter_file_rows(rows, label):
+    if label == "All":
+        return list(rows)
+    want = RED if label.startswith("Red") else GRAY if label.startswith("Gray") else GREEN
+    return [r for r in rows if r["color"] == want]
+
+
 CSV_HEADERS = [
     "Folder path", "Depth", "Folder modified", "Folder modified in period?",
     "Last file activity, modified or created (recursive)",
