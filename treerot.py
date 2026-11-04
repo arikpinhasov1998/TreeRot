@@ -2315,11 +2315,16 @@ NO_BROWSER_MSG = (
 
 
 def _browser_rank(path):
-    """Edge, then Chrome, then Chromium, then anything else such as Brave."""
-    low = os.path.basename(path).lower()
-    for rank, word in enumerate(("edge", "chrome", "chromium")):
-        if word in low:
-            return rank
+    """Edge, then Chrome, then Chromium, then anything else such as Brave. On Windows Chromium's
+    program is also called chrome.exe, so a folder named Chromium just above it decides."""
+    parts = [p.lower() for p in path.replace("\\", "/").split("/") if p][-3:]
+    name = parts[-1] if parts else ""
+    if "edge" in name:
+        return 0
+    if "chromium" in name or "chromium" in parts[:-1]:
+        return 2
+    if "chrome" in name:
+        return 1
     return 3
 
 

@@ -194,6 +194,23 @@ class Pdf(unittest.TestCase):
         ranked = sorted(names, key=app._browser_rank)
         self.assertEqual(ranked, ["edge", "chrome", "chromium", "Brave"])
 
+    def test_chrome_ranks_ahead_of_chromium_wherever_each_is_installed(self):
+        pf, la = "C:\\PF", "C:\\LA"
+        chromium = os.path.join(pf, "Chromium", "Application", "chrome.exe")
+        chrome = os.path.join(la, "Google", "Chrome", "Application", "chrome.exe")
+        brave = os.path.join(la, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+        present = {chromium, chrome, brave}
+        env = {"ProgramFiles": pf, "ProgramFiles(x86)": "", "LOCALAPPDATA": la}
+        with mock.patch.object(app.sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, env), \
+                mock.patch.object(app.os.path, "isfile", side_effect=lambda p: p in present), \
+                mock.patch.object(app.shutil, "which", return_value=None):
+            self.assertEqual(app.find_browsers(), [chrome, chromium, brave])
+        self.assertLess(app._browser_rank("/home/edgar/x/Chrome/Application/chrome.exe"),
+                        app._browser_rank("/opt/Chromium/Application/chrome.exe"))
+        # a user folder with a browser's name in it must not decide the rank
+        self.assertEqual(app._browser_rank("/home/edge/apps/brave"), 3)
+
     def test_brave_is_found_last_on_every_system(self):
         env = {"ProgramFiles": "C:\\PF", "ProgramFiles(x86)": "C:\\PF86", "LOCALAPPDATA": "C:\\LA"}
         for plat in ("win32", "linux", "darwin"):
