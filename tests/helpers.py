@@ -1,12 +1,21 @@
+import atexit
 import importlib.util
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _name = "treerot" if os.path.exists(os.path.join(ROOT, "treerot.py")) else "folder_activity_scanner"
 sys.path.insert(0, ROOT)
 app = importlib.import_module(_name)
+
+# Tests save settings: never touch the real ~/.treerot.json.
+_SETTINGS_DIR = tempfile.mkdtemp(prefix="treerot-test-settings-")
+atexit.register(shutil.rmtree, _SETTINGS_DIR, True)
+app.SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".treerot.json")
+app.OLD_SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".folder_activity_scanner.json")
 
 OLD = datetime(2019, 1, 1).timestamp()
 NEW = datetime(2026, 1, 1).timestamp()
