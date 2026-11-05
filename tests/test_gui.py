@@ -972,6 +972,33 @@ class OpenPath(GuiCase):
         self.assertTrue(self._is_file_for(vanished))
 
 
+class NoBrowserHint(GuiCase):
+    def test_the_export_dialog_names_every_browser_tried(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def texts(widget):
+                out = []
+                for c in widget.winfo_children():
+                    try:
+                        out.append(str(c.cget("text")))
+                    except Exception:
+                        pass
+                    out.extend(texts(c))
+                return out
+
+            def check(w):
+                with mock.patch.object(app, "find_browser", return_value=None):
+                    w._export_report()
+                win = [c for c in w.winfo_children() if c.winfo_class() == "Toplevel"][-1]
+                seen["texts"] = " ".join(texts(win))
+                win.destroy()
+            self.drive(d, check)
+            for name in ("Edge", "Chrome", "Chromium", "Brave"):
+                self.assertIn(name, seen["texts"])
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox

@@ -72,6 +72,11 @@ class Readme(unittest.TestCase):
                     "Actions runs the tests"):
             self.assertNotIn(bad, text)
 
+    def test_the_report_option_names_every_browser_tried(self):
+        out = subprocess.run([sys.executable, os.path.join(ROOT, "treerot.py"), "--help"],
+                             stdout=subprocess.PIPE, universal_newlines=True).stdout
+        self.assertIn("Edge/Chrome/Chromium/Brave", "".join(out.split()))
+
     def test_the_no_browser_message_lists_every_browser_tried(self):
         for name in ("Edge", "Chrome", "Chromium", "Brave"):
             self.assertIn(name, app.NO_BROWSER_MSG)

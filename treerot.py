@@ -2878,7 +2878,7 @@ def run_gui(preload=None, on_ready=None):
                 hint = f"The PDF is printed with {os.path.basename(browser)}."
             else:
                 pdf_rb.state(["disabled"])
-                hint = ("PDF needs Microsoft Edge, Google Chrome or Chromium,\n"
+                hint = ("PDF needs Microsoft Edge, Google Chrome, Chromium or Brave,\n"
                         "and none was found on this computer.")
             ttk.Label(frm, text=hint, foreground="#666666").grid(
                 row=8, column=0, columnspan=2, sticky="w", padx=(22, 0), pady=(10, 0))
@@ -5141,7 +5141,7 @@ def build_parser():
     g.add_argument("--report", metavar="FILE",
                    help="also write a report: storage summary, largest unused folders and the "
                         "color-coded folder tree. FILE.html = interactive (expand folders, search) "
-                        "in any browser; FILE.pdf = fixed pages, printed with Edge/Chrome/Chromium")
+                        "in any browser; FILE.pdf = fixed pages, printed with Edge/Chrome/Chromium/Brave")
     g.add_argument("--report-tree", type=_pdf_tree_arg, default="2", metavar="N|all|unused",
                    help="PDF only: how much of the tree to print - N levels below the top folder, "
                         "'all' for every level (unlimited), or 'unused' for the path to every "
