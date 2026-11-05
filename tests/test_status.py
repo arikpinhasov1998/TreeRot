@@ -154,6 +154,17 @@ class Status(unittest.TestCase):
             self.assertTrue(os.path.isabs(rep))
             self.assertTrue(os.path.exists(rep))
 
+    def test_no_report_claimed_when_none_was_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(os.path.join(d, "s"), {"a/f.txt": OLD})
+            st, rep = os.path.join(d, "x.json"), os.path.join(d, "r.html")
+            with mock.patch.object(app, "scan_tree", return_value=({}, False)):
+                rc = app.main([os.path.join(d, "s"), "--format", "summary", "-q",
+                               "--report", rep, "--status-file", st])
+            self.assertEqual(rc, 0)
+            self.assertFalse(os.path.exists(rep))
+            self.assertIsNone(app.read_status(st)["report"])
+
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:
             w = app.StatusWriter(os.path.join(d, "x.json"))

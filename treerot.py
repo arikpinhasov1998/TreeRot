@@ -3954,6 +3954,8 @@ def _run_cli(a, root, status=None):
         root_info = next(r["info"] for r in rows if r["info"].parent is None)
         remember_totals(settings, tkey, len(rows), root_info.total_files)
         save_settings(settings)
+    if status and not rows:
+        status.report = None                # no report is written without rows: claim none
     sm = summarize(rows, stats.get("excluded", 0), elapsed=time.monotonic() - t0)
     if a.report and rows:
         activity = "modified or created" if uses_created else "modified"
