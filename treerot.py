@@ -1794,7 +1794,8 @@ def run_gui(preload=None, on_ready=None):
             ttk.Label(opt3, text="Show levels:").pack(side="left", padx=(14, 4))
             self.levels_var = tk.StringVar(value="")
             self.levels_cb = ttk.Combobox(opt3, textvariable=self.levels_var, state="readonly",
-                                          width=10, values=["1", "2", "3", "4", "5", "Unlimited"])
+                                          width=10,
+                                          values=[str(n) for n in range(1, 21)] + ["Unlimited"])
             self.levels_cb.pack(side="left")
             self.levels_cb.bind("<<ComboboxSelected>>",
                                 lambda e: self._show_levels(self.levels_var.get()))

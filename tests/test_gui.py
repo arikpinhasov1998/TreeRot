@@ -999,6 +999,21 @@ class NoBrowserHint(GuiCase):
                 self.assertIn(name, seen["texts"])
 
 
+class LevelChoices(GuiCase):
+    def test_the_window_goes_to_twenty_like_the_report(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                seen["values"] = list(w.tk.splitlist(w.levels_cb.cget("values")))
+                w._show_levels("20")
+                seen["level"] = w.levels_var.get()
+            self.drive(d, check)
+            self.assertEqual(seen["values"], [str(n) for n in range(1, 21)] + ["Unlimited"])
+            self.assertEqual(seen["level"], "20")
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox
