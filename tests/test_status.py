@@ -28,7 +28,8 @@ class Status(unittest.TestCase):
             self.assertTrue(os.path.exists(rep))
             self.assertEqual(sorted(s), ["counts", "error", "percent", "report", "state",
                                          "times", "updated"])
-            self.assertFalse(os.path.exists(st + ".tmp"))
+            self.assertEqual(os.listdir(d).count("x.json"), 1)
+            self.assertFalse([n for n in os.listdir(d) if n.endswith(".tmp")])
 
     def test_bad_path_writes_failed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -75,7 +76,7 @@ class Status(unittest.TestCase):
             w = app.StatusWriter(os.path.join(d, "x.json"))
             with mock.patch.object(app.json, "dump", side_effect=TypeError("x")):
                 w.finish("finished")                 # must not raise
-            self.assertFalse(os.path.exists(os.path.join(d, "x.json.tmp")))
+            self.assertFalse([n for n in os.listdir(d) if n.endswith(".tmp")])
 
     def test_failed_replace_leaves_old_file_and_no_tmp(self):
         with tempfile.TemporaryDirectory() as d:
@@ -84,7 +85,7 @@ class Status(unittest.TestCase):
             with mock.patch.object(app.os, "replace", side_effect=PermissionError("busy")):
                 w.finish("finished")
             self.assertEqual(app.read_status(p)["state"], "running")
-            self.assertFalse(os.path.exists(p + ".tmp"))
+            self.assertFalse([n for n in os.listdir(d) if n.endswith(".tmp")])
 
     def test_finish_retries_until_the_replace_works(self):
         with tempfile.TemporaryDirectory() as d:
@@ -112,7 +113,7 @@ class Status(unittest.TestCase):
                                       side_effect=PermissionError("busy")) as rp:
                 self.assertFalse(w.finish("failed", "x"))
             self.assertEqual(rp.call_count, app.StatusWriter.FINISH_TRIES)
-            self.assertFalse(os.path.exists(p + ".tmp"))
+            self.assertFalse([n for n in os.listdir(d) if n.endswith(".tmp")])
 
     def test_scan_result_unchanged_when_final_write_never_works(self):
         with tempfile.TemporaryDirectory() as d:
@@ -122,6 +123,20 @@ class Status(unittest.TestCase):
                 rc = app.main([os.path.join(d, "s"), "--format", "summary", "-q",
                                "--status-file", os.path.join(d, "x.json")])
             self.assertEqual(rc, 0)
+
+    def test_temp_file_name_is_per_process(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x.json")
+            seen = []
+            real = os.replace
+
+            def spy(a, b):
+                seen.append(a)
+                real(a, b)
+            with mock.patch.object(app.os, "replace", side_effect=spy):
+                app.StatusWriter(p).finish("finished")
+            self.assertTrue(seen)
+            self.assertTrue(all(str(os.getpid()) in os.path.basename(a) for a in seen), seen)
 
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:
