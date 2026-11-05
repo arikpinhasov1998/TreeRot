@@ -966,6 +966,7 @@ JOBS_DIR = os.path.join(os.path.expanduser("~"), ".treerot", "jobs")
 TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 TASK_PREFIX = "TreeRot-"                # every task this program creates, and only those; flat,
                                         # as a standard user may not be able to create a task folder
+STATUS_SUFFIX = ".status.json"          # a job's status file is its report's name plus this
 STARTING_GRACE_SECONDS = 300            # no status after this long: the task did not get going
 SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
 JOBS_REFRESH_MS = 5000                  # how often the open panel looks at the scans again
@@ -1017,6 +1018,10 @@ def _full_path(path):
     if re.match(r"[A-Za-z]:[\\/]", path):
         return ntpath.normpath(path)
     return os.path.abspath(path)
+
+
+def _is_report_name(path):
+    return os.path.splitext(path)[1].lower() in (".html", ".pdf")
 
 
 def _same_path(a, b):
@@ -1234,9 +1239,11 @@ def start_background_scan(root, args, report, runner=None):
         raise BackgroundError("Mapped drive letters do not exist in a background task. Save the "
                               "report by its full network path instead, for example "
                               "\\\\server\\share\\report.html.")
+    if not _is_report_name(report):
+        raise BackgroundError("A background scan's report must be a .html or .pdf file.")
     if not os.path.isdir(os.path.dirname(report)):
         raise BackgroundError(f"The report's folder does not exist or is not reachable: {report}")
-    status_file = report + ".status.json"
+    status_file = report + STATUS_SUFFIX
     user = windows_user()
     exe, arguments = background_command(root, list(args) + ["--report", report], status_file)
     xml_text = build_task_xml(exe, arguments, user)
@@ -1286,7 +1293,8 @@ def start_background_scan(root, args, report, runner=None):
 
 
 def load_jobs():
-    """The saved job records. A file that is not exactly a record of ours is skipped."""
+    """The saved job records. A file that is not exactly a record of ours is skipped: a record
+    says which file the panel will open, so its report must be a report."""
     jobs = []
     try:
         names = sorted(os.listdir(JOBS_DIR))
@@ -1300,7 +1308,9 @@ def load_jobs():
             except (OSError, ValueError):
                 continue
             if (isinstance(job, dict) and _names_our_task(job) and n == job["id"] + ".json"
-                    and all(isinstance(job.get(k), str) for k in ("root", "report", "status_file"))):
+                    and all(isinstance(job.get(k), str) for k in ("root", "report", "status_file"))
+                    and _is_report_name(job["report"])
+                    and job["status_file"] == job["report"] + STATUS_SUFFIX):
                 jobs.append(job)
     return jobs
 

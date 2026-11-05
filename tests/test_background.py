@@ -660,6 +660,30 @@ class OnlyOurTasks(JobCase):
                 f.write(text)
         self.assertEqual([j["id"] for j in app.load_jobs()], [job["id"]])
 
+    def test_a_crafted_record_cannot_point_the_panel_at_another_file(self):
+        job = self.start()
+        evil = os.path.join(self.d, "evil.exe")
+        for name, fields in (
+                ("exe", {"report": evil, "status_file": evil + ".status.json"}),
+                ("no extension", {"report": os.path.join(self.d, "r"),
+                                  "status_file": os.path.join(self.d, "r.status.json")}),
+                ("status elsewhere", {"status_file": os.path.join(self.d, "other.json")})):
+            with self.subTest(name):
+                app._save_job(dict(job, **fields))
+                self.assertEqual(app.load_jobs(), [])
+        for report in ("r.html", "r.HTML", "r.pdf", "r.Pdf"):
+            with self.subTest(report):
+                path = os.path.join(self.d, report)
+                app._save_job(dict(job, report=path, status_file=path + ".status.json"))
+                self.assertEqual(len(app.load_jobs()), 1)
+
+    def test_a_report_of_another_type_is_refused_before_any_task_exists(self):
+        # load_jobs would skip its record, leaving a task nobody can see.
+        with self.assertRaises(app.BackgroundError) as c:
+            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.txt"), runner=self.run_ok)
+        self.assertIn(".html", str(c.exception))
+        self.assertEqual(self.cmds, [])
+
     def test_end_asks_for_exactly_this_task_and_records_it(self):
         job = self.start()
         self.cmds = []
