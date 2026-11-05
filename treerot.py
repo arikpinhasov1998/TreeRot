@@ -979,6 +979,7 @@ _NOT_TASK_TEXT = re.compile("[^\t\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
 
 
 # Task Scheduler may expand these in a command line, which would silently change the value.
+_CMD_SPECIAL = re.compile('["%&^|<>\x00-\x1f]')    # what cmd.exe could read as something else
 _TASK_EXPANDS = re.compile(r"%[^%]+%|\$\([^)]*\)")
 
 
@@ -1123,6 +1124,30 @@ def schtasks_exe(platform=None, environ=None):
     return ntpath.join(env.get("SystemRoot") or "C:\\Windows", "System32", "schtasks.exe")
 
 
+def cmd_exe(platform=None, environ=None):
+    if (platform or sys.platform) != "win32":
+        return "cmd.exe"
+    env = os.environ if environ is None else environ
+    return ntpath.join(env.get("SystemRoot") or "C:\\Windows", "System32", "cmd.exe")
+
+
+def task_create_command(task, xml_name, user, platform=None, environ=None):
+    """The line that creates the task, as one exact string. cmd.exe is there for one thing: if
+    schtasks fails, Windows' own message stays on screen until a key is pressed. Nothing can be
+    captured instead: any redirect makes the console prompt vanish under a windowed TreeRot.exe.
+    cmd reads every character here, so only names it cannot misread go on the line; the XML
+    file is found through the working folder, not by its path."""
+    if _CMD_SPECIAL.search(user):
+        raise BackgroundError(
+            f"Your Windows user name ({user}) has a character that cannot be passed safely to "
+            "Windows' password prompt. The README shows how to set this up by hand.")
+    shell, exe = cmd_exe(platform, environ), schtasks_exe(platform, environ)
+    if _CMD_SPECIAL.search(shell + exe + task + xml_name):
+        raise BackgroundError(f"The Windows folder or task name cannot be passed safely: {shell}")
+    return (f'"{shell}" /d /c ""{exe}" /Create /TN {task} /XML {xml_name} /RU "{user}" /RP * '
+            '|| (pause & exit /b 1)"')
+
+
 def windows_user():
     env = os.environ
     user = env.get("USERNAME", "")
@@ -1136,12 +1161,12 @@ def _only_on_windows():
         raise BackgroundError("Background scans need Windows Task Scheduler.")
 
 
-def _console_run(cmd):
-    """Runs schtasks in its own visible console so Windows itself can ask for the password.
-    Nothing is redirected: the prompt must reach the screen and the typing must reach schtasks,
-    never this program. The price is that Windows' error text cannot be read here either."""
+def _console_run(command, cwd):
+    """Runs the line from task_create_command in its own visible console so Windows itself can
+    ask for the password. Nothing is redirected: the prompt must reach the screen and the typing
+    must reach schtasks, never this program."""
     _only_on_windows()
-    return subprocess.run(cmd, creationflags=0x00000010)     # CREATE_NEW_CONSOLE
+    return subprocess.run(command, cwd=cwd, creationflags=0x00000010)     # CREATE_NEW_CONSOLE
 
 
 def _quiet_run(cmd):
@@ -1269,23 +1294,26 @@ def start_background_scan(root, args, report, runner=None):
 
     job_id = f"{datetime.now():%Y%m%d-%H%M%S}-{os.urandom(2).hex()}"
     task = TASK_PREFIX + job_id
+    xml_name = job_id + ".xml"
+    command = task_create_command(task, xml_name, user)
+    if _full_path(JOBS_DIR).startswith("\\\\"):
+        raise BackgroundError(f"Background scans cannot keep their files on a network path "
+                              f"({JOBS_DIR}): the password window would not find them.")
     job = {"id": job_id, "task": task, "root": root, "report": report, "status_file": status_file,
            "started": time.time()}
     os.makedirs(JOBS_DIR, exist_ok=True)
     _save_job(job)                       # first, so no task ever exists without a record
     create = runner or _console_run
     run = runner or _quiet_run
-    xml_path = os.path.join(JOBS_DIR, job_id + ".xml")
+    xml_path = os.path.join(JOBS_DIR, xml_name)
     created = False
     try:
         write_task_xml(xml_path, xml_text)
-        res = create([schtasks_exe(), "/Create", "/TN", task, "/XML", xml_path, "/RU", user,
-                      "/RP", "*"])
+        res = create(command, cwd=JOBS_DIR)
         if res.returncode != 0:
             raise BackgroundError(
-                "The background task could not be created. "
-                + (_windows_text(res) or "Check your password and that you may create scheduled tasks.")
-                + " The README shows how to set this up by hand.")
+                "The background task could not be created. The reason is in the console window "
+                "that asked for your password. The README shows how to set this up by hand.")
         created = True
         res = run([schtasks_exe(), "/Run", "/TN", task])
         if res.returncode != 0:

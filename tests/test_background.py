@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -233,17 +234,46 @@ class FolderCheck(unittest.TestCase):
                 self.assertIn("\\\\server\\share", app.check_background_folder(d))
 
 
+class CreateCommand(unittest.TestCase):
+    def test_the_exact_line(self):
+        line = app.task_create_command("TreeRot-20260101-000000-abcd", "20260101-000000-abcd.xml",
+                                       "DOM\\me", platform="win32", environ={"SystemRoot": "D:\\Win"})
+        self.assertEqual(
+            line,
+            '"D:\\Win\\System32\\cmd.exe" /d /c ""D:\\Win\\System32\\schtasks.exe" /Create '
+            '/TN TreeRot-20260101-000000-abcd /XML 20260101-000000-abcd.xml /RU "DOM\\me" /RP * '
+            '|| (pause & exit /b 1)"')
+
+    def test_a_user_name_with_a_space_or_other_letters_is_fine(self):
+        line = app.task_create_command("T", "x.xml", "דומיין\\First Last", platform="win32", environ={})
+        self.assertIn('/RU "דומיין\\First Last" /RP *', line)
+
+    def test_a_user_name_cmd_could_misread_is_refused_with_the_way_out(self):
+        for bad in ('me"', "me%x%", "a&b", "a^b", "a|b", "a<b", "a>b", "a\nb"):
+            with self.subTest(bad=bad), self.assertRaises(app.BackgroundError) as c:
+                app.task_create_command("T", "x.xml", bad, platform="win32", environ={})
+            self.assertIn("user name", str(c.exception))
+            self.assertIn("README", str(c.exception))
+
+    def test_a_system_folder_cmd_could_misread_is_refused(self):
+        with self.assertRaises(app.BackgroundError):
+            app.task_create_command("T", "x.xml", "me", platform="win32", environ={"SystemRoot": "C:\\a&b"})
+
+    def test_cmd_is_named_in_full_on_windows(self):
+        self.assertEqual(app.cmd_exe(platform="win32", environ={"SystemRoot": "D:\\Win"}),
+                         "D:\\Win\\System32\\cmd.exe")
+
+
 class Consoles(unittest.TestCase):
     """How schtasks is started. subprocess.run is replaced: it never really runs."""
 
     def test_password_console_is_real_and_nothing_captures_it(self):
         with mock.patch.object(app.subprocess, "run") as run, \
                 mock.patch.object(app.sys, "platform", "win32"):
-            app._console_run(["schtasks", "/RP", "*"])
-        kw = run.call_args[1]
-        self.assertEqual(kw.get("creationflags"), 0x00000010)     # CREATE_NEW_CONSOLE
-        for key in ("stdin", "stdout", "stderr", "input", "capture_output", "env", "text"):
-            self.assertNotIn(key, kw)
+            app._console_run("the line", cwd="C:\\jobs")
+        self.assertEqual(run.call_args[0], ("the line",))         # one string, not re-quoted
+        self.assertEqual(run.call_args[1], {"cwd": "C:\\jobs",
+                                            "creationflags": 0x00000010})  # CREATE_NEW_CONSOLE
 
     def test_quiet_run_cannot_hang_and_shows_no_window(self):
         with mock.patch.object(app.subprocess, "run") as run, \
@@ -266,7 +296,7 @@ class Consoles(unittest.TestCase):
         with mock.patch.object(app.subprocess, "run") as run, \
                 mock.patch.object(app.sys, "platform", "darwin"):
             with self.assertRaises(app.BackgroundError):
-                app._console_run(["schtasks"])
+                app._console_run("schtasks", cwd=".")
             with self.assertRaises(app.BackgroundError):
                 app._quiet_run(["schtasks"])
         run.assert_not_called()
@@ -316,7 +346,7 @@ class Jobs(JobCase):
     def test_password_is_prompted_by_windows_and_task_started(self):
         job = self.start()
         create = self.cmds[0]
-        self.assertEqual(create[create.index("/RP") + 1], "*")
+        self.assertIn("/RP * ", create)
         self.assertIn("/XML", create)
         self.assertIn("/Run", self.cmds[1])
         self.assertEqual(app.load_jobs()[0]["task"], job["task"])
@@ -335,6 +365,8 @@ class Jobs(JobCase):
         with self.assertRaises(app.BackgroundError) as c:
             app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=fail)
         self.assertIn("could not be created", str(c.exception))
+        self.assertIn("console window", str(c.exception))
+        self.assertIn("README", str(c.exception))
         self.assertEqual(app.load_jobs(), [])
 
     def test_states(self):
@@ -360,9 +392,9 @@ class Jobs(JobCase):
         with mock.patch.dict(os.environ, {"TREEROT_SECRET_PROBE": "x"}):
             self.start()
         create = self.cmds[0]
-        self.assertEqual(sum(a == "/RP" for a in create), 1)
-        self.assertEqual(create[create.index("/RU") + 1], "DOM\\me")
-        self.assertEqual(create[create.index("/TN") + 1], app.load_jobs()[0]["task"])
+        self.assertEqual(create.count("/RP"), 1)
+        self.assertIn('/RU "DOM\\me" /RP * ', create)
+        self.assertIn("/TN %s " % app.load_jobs()[0]["task"], create)
         self.assertNotIn("/F", create)         # a name collision may never overwrite a task
 
     def test_runner_gets_no_input_or_pipes(self):
@@ -372,14 +404,16 @@ class Jobs(JobCase):
             seen.append(kw)
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(seen[0], {})
+        self.assertEqual(seen[0], {"cwd": app.JOBS_DIR})    # and nothing that could capture
 
     def test_task_xml_is_passed_by_file_and_then_removed(self):
         seen = {}
 
         def runner(cmd, **kw):
-            if "/XML" in cmd:
-                with open(cmd[cmd.index("/XML") + 1], "rb") as f:
+            if "/Create" in cmd:
+                name = re.search(r"/XML (\S+) ", cmd).group(1)
+                self.assertRegex(name, r"\A[0-9a-f-]+\.xml\Z")    # plain ASCII, nothing to quote
+                with open(os.path.join(kw["cwd"], name), "rb") as f:
                     seen["xml"] = f.read()
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
@@ -399,8 +433,20 @@ class Jobs(JobCase):
         env = {k: v for k, v in os.environ.items() if k != "USERDOMAIN"}
         with mock.patch.dict(os.environ, env, clear=True):
             self.start()
-        create = self.cmds[0]
-        self.assertEqual(create[create.index("/RU") + 1], "me")
+        self.assertIn('/RU "me" /RP * ', self.cmds[0])
+
+    def test_unsafe_user_name_stops_before_any_prompt_or_record(self):
+        with mock.patch.dict(os.environ, {"USERNAME": "a&b"}), self.assertRaises(app.BackgroundError):
+            self.start()
+        self.assertEqual(self.cmds, [])
+        self.assertEqual(app.load_jobs(), [])
+
+    def test_a_jobs_folder_cmd_cannot_stand_in_is_refused_before_any_prompt(self):
+        # cmd.exe will not use a \\\\server\\share folder as its working folder.
+        with mock.patch.object(app, "JOBS_DIR", "\\\\srv\\home\\.treerot\\jobs"), \
+                self.assertRaises(app.BackgroundError):
+            self.start()
+        self.assertEqual(self.cmds, [])
 
     # ---- paths
 
@@ -850,8 +896,9 @@ class WholeCommand(JobCase):
         seen = {}
 
         def runner(cmd, **kw):
-            if "/XML" in cmd:
-                with open(cmd[cmd.index("/XML") + 1], "rb") as f:
+            if "/Create" in cmd:
+                name = re.search(r"/XML (\S+) ", cmd).group(1)
+                with open(os.path.join(kw["cwd"], name), "rb") as f:
                     seen["xml"] = ET.fromstring(f.read())
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         csv_out = os.path.join(out, "rows.csv")

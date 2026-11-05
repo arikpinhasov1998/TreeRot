@@ -36,7 +36,7 @@ class BackgroundGui(GuiCase, JobCase):
         self.schtasks_threads.append(threading.current_thread())
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
-    def no_console(self, cmd):
+    def no_console(self, cmd, **kw):
         raise AssertionError("a test tried to open the password console")
 
     def wait(self, w, cond, then, tries=400):
