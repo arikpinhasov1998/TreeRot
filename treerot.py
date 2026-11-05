@@ -1288,9 +1288,6 @@ def _clear_the_way(status_file, job_id, runner):
     only /Run can. A status file left at this path could pass for this run's result (a scan
     stopped by bad arguments never writes one), so it goes first or nothing starts. Waiting
     until now means canceling the password prompt loses nothing from the earlier scan."""
-    for other in load_jobs():
-        if other["id"] != job_id and _same_path(other["status_file"], status_file):
-            remove_job(other, runner=runner)    # its report is about to be replaced
     try:
         os.remove(status_file)
     except FileNotFoundError:
@@ -1298,6 +1295,9 @@ def _clear_the_way(status_file, job_id, runner):
     except OSError as e:
         raise BackgroundError(f"The old status file {status_file} could not be removed, so its "
                               f"result could be mistaken for this scan's. {e}")
+    for other in load_jobs():
+        if other["id"] != job_id and _same_path(other["status_file"], status_file):
+            remove_job(other, runner=runner)    # its report is about to be replaced
 
 
 def _take_back(job, run, why):
@@ -1372,6 +1372,7 @@ def start_background_scan(root, args, report, runner=None):
     try:
         _clear_the_way(status_file, job_id, runner)
         del job["creating"]
+        job["started"] = time.time()     # the wait for a scan's first news starts here
         _save_job(job)
         res = run([schtasks_exe(), "/Run", "/TN", task])
         if res.returncode != 0:

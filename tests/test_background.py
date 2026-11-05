@@ -580,6 +580,32 @@ class Jobs(JobCase):
         self.assertEqual(seen["rows"][second["id"]], "creating")
         self.assertEqual(app.job_state(app.load_jobs()[0])[0], "starting")   # the prompt is over
 
+    def test_time_at_the_password_prompt_does_not_count_against_the_scan(self):
+        now = [1000.0]
+
+        def slow_typist(cmd, **kw):
+            if "/Create" in cmd:
+                now[0] = 2000.0
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        with mock.patch.object(app.time, "time", lambda: now[0]):
+            job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"),
+                                            runner=slow_typist)
+            self.assertEqual(app.job_state(job)[0], "starting")
+        self.assertEqual(app.load_jobs()[0]["started"], 2000.0)
+
+    def test_an_old_status_that_stays_keeps_the_earlier_entry_too(self):
+        first = self.start()
+        self.write_status(first, state="finished", report=first["report"])
+        real = os.remove
+
+        def remove(path):
+            if path == first["status_file"]:
+                raise PermissionError("in use")
+            real(path)
+        with mock.patch.object(app.os, "remove", remove), self.assertRaises(app.BackgroundError):
+            self.start()
+        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
+
     def test_a_prompt_left_behind_ends_up_removable_and_not_finished(self):
         first = self.start()
         self.write_status(first, state="finished", report=first["report"])
