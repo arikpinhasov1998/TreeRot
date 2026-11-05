@@ -8,6 +8,11 @@ from tests.helpers import OLD, app, make_tree
 
 
 class Status(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_success_writes_finished(self):
         with tempfile.TemporaryDirectory() as d:
             make_tree(os.path.join(d, "s"), {"a/f.txt": OLD})
@@ -78,6 +83,43 @@ class Status(unittest.TestCase):
                 w.finish("finished")
             self.assertEqual(app.read_status(p)["state"], "running")
             self.assertFalse(os.path.exists(p + ".tmp"))
+
+    def test_finish_retries_until_the_replace_works(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x.json")
+            w = app.StatusWriter(p)
+            real, calls = os.replace, []
+
+            def flaky(a, b):
+                calls.append(1)
+                if len(calls) <= 3:
+                    raise PermissionError("reader has it open")
+                real(a, b)
+            with mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0), \
+                    mock.patch.object(app.os, "replace", side_effect=flaky):
+                self.assertTrue(w.finish("finished"))
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(app.read_status(p)["state"], "finished")
+
+    def test_finish_gives_up_quietly_and_says_so(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x.json")
+            w = app.StatusWriter(p)
+            with mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0), \
+                    mock.patch.object(app.os, "replace",
+                                      side_effect=PermissionError("busy")) as rp:
+                self.assertFalse(w.finish("failed", "x"))
+            self.assertEqual(rp.call_count, app.StatusWriter.FINISH_TRIES)
+            self.assertFalse(os.path.exists(p + ".tmp"))
+
+    def test_scan_result_unchanged_when_final_write_never_works(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(os.path.join(d, "s"), {"a/f.txt": OLD})
+            with mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0), \
+                    mock.patch.object(app.StatusWriter, "_write_file", return_value=False):
+                rc = app.main([os.path.join(d, "s"), "--format", "summary", "-q",
+                               "--status-file", os.path.join(d, "x.json")])
+            self.assertEqual(rc, 0)
 
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:

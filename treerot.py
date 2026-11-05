@@ -3716,6 +3716,8 @@ class StatusWriter:
     sees a half-written file. A failed write is ignored: it must never stop a scan."""
 
     INTERVAL = 5
+    FINISH_TRIES = 8
+    RETRY_DELAY = 0.25
 
     def __init__(self, path, report=None):
         self.path, self.report = path, report
@@ -3725,18 +3727,24 @@ class StatusWriter:
         self._write("running")
 
     def _write(self, state, percent="", counts="", times="", error=""):
+        data = {"state": state, "percent": percent, "counts": counts, "times": times,
+                "updated": time.time(), "report": self.report, "error": error}
+        return self._write_file(data)
+
+    def _write_file(self, data):
+        """One attempt to replace the status file. True if it worked."""
         tmp = self.path + ".tmp"
         try:
-            data = {"state": state, "percent": percent, "counts": counts, "times": times,
-                    "updated": time.time(), "report": self.report, "error": error}
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             os.replace(tmp, self.path)
+            return True
         except (OSError, ValueError, TypeError):
             try:
                 os.remove(tmp)
             except OSError:
                 pass                   # a status problem must never stop the scan
+            return False
 
     def update(self, p):
         try:
@@ -3750,7 +3758,14 @@ class StatusWriter:
             pass                       # progress text is never worth stopping a scan for
 
     def finish(self, state, error=""):
-        self._write(state, "100%" if state == "finished" else "", error=error)
+        """Write the final state, retrying: on Windows a reader holding the file open makes
+        the replace fail, and nothing would ever correct a stale "running". True if written."""
+        for i in range(self.FINISH_TRIES):
+            if i:
+                time.sleep(self.RETRY_DELAY)
+            if self._write(state, "100%" if state == "finished" else "", error=error):
+                return True
+        return False
 
 
 def read_status(path):
