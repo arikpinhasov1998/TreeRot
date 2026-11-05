@@ -79,19 +79,35 @@ jobs:
           Stop-Process -Id $g.Id -Force
           Write-Host "Windows tests OK"
 
-      - name: Test a real background task (informational)
+      # S4U logon needs no password, which also means this cannot reach network shares and does
+      # not test Password logon: it proves the task XML, /Run and the status file.
+      - name: Test a real background task
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           python -c "import treerot,os; open('t.xml','w',encoding='utf-16').write(treerot.build_task_xml(os.path.abspath('dist/release/TreeRot-cli.exe'), [os.getcwd(), '--format', 'summary', '-q', '--progress', 'none', '--report', os.path.abspath('bg.html'), '--status-file', os.path.abspath('bg.json')], os.environ['USERDOMAIN'] + '\\' + os.environ['USERNAME'], logon_type='S4U'))"
-          schtasks /Create /TN TreeRot\ci /XML t.xml /F
-          schtasks /Run /TN TreeRot\ci
-          for ($i = 0; $i -lt 30 -and -not (Test-Path bg.html); $i++) { Start-Sleep -Seconds 2 }
-          schtasks /Delete /TN TreeRot\ci /F
-          if (-not (Test-Path bg.html)) { throw "The background task produced no report" }
-          Get-Content bg.json
+          if ($LASTEXITCODE -ne 0) { throw "The task XML could not be built" }
+          schtasks /Create /TN TreeRot-ci /XML t.xml /F
+          if ($LASTEXITCODE -ne 0) { throw "The task could not be created" }
+          try {
+            schtasks /Run /TN TreeRot-ci
+            if ($LASTEXITCODE -ne 0) { throw "The task could not be started" }
+            $state = ""
+            for ($i = 0; $i -lt 90 -and $state -ne "finished" -and $state -ne "failed"; $i++) {
+              Start-Sleep -Seconds 2
+              if (Test-Path bg.json) {
+                try { $state = (Get-Content bg.json -Raw | ConvertFrom-Json).state } catch { }
+              }
+            }
+            # What the panel reads for a task that never started: Last Result is the 7th column.
+            schtasks /Query /TN TreeRot-ci /V /FO CSV /NH
+            if (Test-Path bg.json) { Get-Content bg.json }
+            if ($state -ne "finished") { throw "The background task ended in state '$state'" }
+            if (-not (Test-Path bg.html)) { throw "The background task produced no report" }
+          } finally {
+            schtasks /Delete /TN TreeRot-ci /F
+          }
 
       - name: Test (Linux)
         if: runner.os == 'Linux'

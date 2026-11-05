@@ -1053,6 +1053,31 @@ class Cleanup(JobCase):
         self.assertEqual(sorted(os.listdir(app.JOBS_DIR)), [job["id"] + ".json"])
 
 
+class ReleaseWorkflow(unittest.TestCase):
+    def step(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            ".github", "workflows", "release.yml")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("- name: Test a real background task")
+        return text[start:text.index("\n      - ", start)]
+
+    def test_the_real_task_must_finish_and_is_always_deleted(self):
+        step = self.step()
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("finally", step)
+        self.assertLess(step.index("finally"), step.index("schtasks /Delete /TN TreeRot-ci /F"))
+        self.assertIn('-ne "finished"', step)
+        self.assertIn("TreeRot-ci", step)
+        self.assertNotIn("TreeRot\\ci", step)
+
+    def test_it_uses_no_password(self):
+        step = self.step()
+        self.assertIn("S4U", step)
+        self.assertNotIn("/RP", step)
+        self.assertNotIn("secrets.", step)
+
+
 class WholeCommand(JobCase):
     def test_the_real_command_scans_and_finishes(self):
         """Everything but Task Scheduler: this runs the exact program and arguments the task
