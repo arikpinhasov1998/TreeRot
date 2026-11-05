@@ -129,6 +129,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
       - name: Check that the tag matches __version__
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -138,10 +142,6 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match __version__ = $v in treerot.py"
             exit 1
           fi
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
 
       - name: Linux - install Tk (for the window) and a virtual screen (for the test)
         if: runner.os == 'Linux'

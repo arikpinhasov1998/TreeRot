@@ -65,6 +65,16 @@ class Readme(unittest.TestCase):
             self.assertIn(name, app.NO_BROWSER_MSG)
 
 
+class Release(unittest.TestCase):
+    def test_the_tag_check_runs_after_python_is_set_up(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8") as f:
+            text = f.read()
+        build = text.index("Check that the tag matches __version__")
+        self.assertLess(text.rindex("actions/setup-python", 0, build), build)
+        self.assertLess(text.rindex("actions/checkout", 0, build),
+                        text.rindex("actions/setup-python", 0, build))
+
+
 class Migration(unittest.TestCase):
     def test_old_settings_read_once_and_old_file_kept(self):
         with tempfile.TemporaryDirectory() as d:
