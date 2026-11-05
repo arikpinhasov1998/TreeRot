@@ -1,11 +1,13 @@
 """The date range decides what is called unused, so its edges are tested exactly."""
+import io
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-from tests.helpers import app, make_tree
+from tests.helpers import OLD, app, make_tree
 
 
 class ToDayEnds(unittest.TestCase):
@@ -106,3 +108,52 @@ class CreatedBoundaries(unittest.TestCase):
             self.skipTest("the birth time follows an older modified time here")
         now = datetime.now().timestamp()
         self.assertTrue(scanned_in_range(self.OUTSIDE, lo=now - 3600, hi=None, created="ctime"))
+
+
+class PeriodBounds(unittest.TestCase):
+    def test_every_refusal_reads_as_a_bad_date(self):
+        for exc in (ValueError("x"), OSError(22, "x"), OverflowError("x")):
+            class Refuses(datetime):
+                def timestamp(self):
+                    raise exc
+            with self.subTest(type(exc).__name__):
+                with self.assertRaises(ValueError):
+                    app.period_bounds(Refuses(1900, 1, 1), None)
+                with self.assertRaises(ValueError):
+                    app.period_bounds(None, Refuses(1900, 1, 1))
+
+    def test_usable_dates_and_blanks(self):
+        self.assertEqual(app.period_bounds(FROM, TO), (LO, HI))
+        self.assertEqual(app.period_bounds(None, None), (None, None))
+
+
+class ShellDates(unittest.TestCase):
+    def _run(self, *extra):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"s/f.txt": OLD})
+            st = os.path.join(d, "x.json")
+            with mock.patch.object(sys, "stderr", err):
+                rc = app.main([os.path.join(d, "s"), "--format", "summary", "-q", "--progress", "none",
+                               "--status-file", st] + list(extra))
+            status = app.read_status(st)
+        return rc, err.getvalue(), status
+
+    def test_a_from_date_before_any_time_is_a_clear_error(self):
+        rc, err, status = self._run("--from", "0001-01-01")
+        self.assertEqual(rc, 2)
+        self.assertIn("out of range", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("out of range", status["error"])
+
+    def test_a_date_windows_refuses_is_a_clear_error(self):
+        with mock.patch.object(app, "period_bounds", side_effect=ValueError("x")):
+            rc, err, _ = self._run("--from", "1900-01-01")
+        self.assertEqual(rc, 2)
+        self.assertIn("out of range", err)
+
+    def test_years_too_far_back_is_a_clear_error(self):
+        rc, err, _ = self._run("--years", "5000")
+        self.assertEqual(rc, 2)
+        self.assertIn("out of range", err)

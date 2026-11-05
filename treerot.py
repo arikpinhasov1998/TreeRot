@@ -587,6 +587,15 @@ def parse_date(text, end_of_day=False):
     return d.replace(hour=23, minute=59, second=59, microsecond=999999) if end_of_day else d
 
 
+def period_bounds(d_from, d_to):
+    """The period as timestamps (None = open-ended). Raises ValueError for a date this computer
+    cannot turn into a time: year 1, or before 1970 on some Windows versions."""
+    try:
+        return (d_from.timestamp() if d_from else None, d_to.timestamp() if d_to else None)
+    except (OSError, OverflowError) as e:
+        raise ValueError(str(e))
+
+
 def describe_period(d_from, d_to):
     if d_from and d_to:
         return f"{d_from:%Y-%m-%d} to {d_to:%Y-%m-%d}"
@@ -2078,6 +2087,7 @@ def run_gui(preload=None, on_ready=None):
             try:
                 d_from = parse_date(self.from_var.get())
                 d_to = parse_date(self.to_var.get(), end_of_day=True)
+                lo, hi = period_bounds(d_from, d_to)
             except ValueError:
                 messagebox.showerror("Invalid date", "Use the format YYYY-MM-DD, e.g. 2024-10-28.")
                 return
@@ -2103,7 +2113,7 @@ def run_gui(preload=None, on_ready=None):
                     ok = os.path.isdir(root)
                 except Exception:
                     ok = False
-                q.put(("scan_checked", token, root, d_from, d_to, ok))
+                q.put(("scan_checked", token, root, d_from, d_to, lo, hi, ok))
             threading.Thread(target=work, daemon=True).start()
 
         def _scan_check_over(self, status):
@@ -2114,7 +2124,7 @@ def run_gui(preload=None, on_ready=None):
             self.report_btn.config(state="normal" if self.rows else "disabled")
             self.status_var.set(status)
 
-        def _scan_checked(self, token, root, d_from, d_to, ok):
+        def _scan_checked(self, token, root, d_from, d_to, lo, hi, ok):
             if token != self._scan_token or not self._scan_checking:
                 return
             if not ok:
@@ -2123,12 +2133,10 @@ def run_gui(preload=None, on_ready=None):
                                      "That folder does not exist or is not reachable.")
                 return
             self._scan_checking = False
-            self._begin_scan(root, d_from, d_to)
+            self._begin_scan(root, d_from, d_to, lo, hi)
 
-        def _begin_scan(self, root, d_from, d_to):
+        def _begin_scan(self, root, d_from, d_to, lo, hi):
             self.period_text = describe_period(d_from, d_to)
-            lo = d_from.timestamp() if d_from else None
-            hi = d_to.timestamp() if d_to else None
 
             self.cancel_event.clear()
             self.rows = []
@@ -4972,8 +4980,16 @@ def _run_cli(a, root, status=None):
             if status:
                 status.error_text = "Error: --from is later than --to."
             return 2
-    else:
-        d_from, d_to = datetime.now() - timedelta(days=365.25 * (a.years or 2.0)), None
+    try:
+        if not (a.date_from or a.date_to):
+            d_from, d_to = datetime.now() - timedelta(days=365.25 * (a.years or 2.0)), None
+        lo, hi = period_bounds(d_from, d_to)
+    except (ValueError, OverflowError) as e:
+        text = f"Error: the date is out of range for this computer ({e})."
+        sys.stderr.write(text + "\n")
+        if status:
+            status.error_text = text
+        return 2
 
     excludes = list(a.exclude or [])
     if a.exclude_common:
@@ -5039,8 +5055,7 @@ def _run_cli(a, root, status=None):
         folders, _ = scan_tree(
             root, progress_cb=reporter, excludes=excludes, stats=stats,
             follow_symlinks=a.follow_symlinks,
-            date_from_ts=d_from.timestamp() if d_from else None,
-            date_to_ts=d_to.timestamp() if d_to else None, totals=totals, totals_exact=exact,
+            date_from_ts=lo, date_to_ts=hi, totals=totals, totals_exact=exact,
             created=a.created)
     if printer:
         printer.finish()

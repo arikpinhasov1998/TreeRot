@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from unittest import mock
 
 from tests.helpers import NEW, OLD, app, make_tree
@@ -1120,6 +1121,78 @@ class AboutBox(GuiCase):
             self.assertTrue(seen["closed"])
             self.assertFalse(seen["after_close"])
             self.assertEqual(seen["url"], app.CREDIT_URL)
+
+
+class OutOfRangeDate(GuiCase):
+    def _refused_then_scans_again(self, arrange):
+        """arrange(w) sets up a date the computer cannot use; the window must refuse it and stay usable."""
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                restore = arrange(w)
+                status = w.status_var.get()
+                with mock.patch.object(app_messagebox(), "showerror") as err:
+                    w._start()
+                seen["title"] = err.call_args[0][0] if err.called else None
+                seen["buttons"] = [str(b.cget("state")) for b in
+                                   (w.scan_btn, w.cancel_btn, w.export_btn, w.report_btn)]
+                seen["status_kept"] = w.status_var.get() == status
+                seen["rows_kept"] = bool(w.rows)
+                restore()
+                w._start()                     # the buttons still work
+
+                def again():
+                    if str(w.scan_btn.cget("state")) != "normal":
+                        w.after(50, again)
+                        return
+                    seen["rescanned"] = bool(w.rows)
+                w.after(50, again)
+            self.drive(d, check, lambda: "rescanned" in seen)
+            self.assertEqual(seen["title"], "Invalid date")
+            self.assertEqual(seen["buttons"], ["normal", "disabled", "normal", "normal"])
+            self.assertTrue(seen["status_kept"])
+            self.assertTrue(seen["rows_kept"])
+            self.assertTrue(seen.get("rescanned"))
+
+    def test_a_from_date_before_any_time(self):
+        def arrange(w):
+            w.from_var.set("0001-01-01")
+            return lambda: w.from_var.set("2024-11-04")
+        self._refused_then_scans_again(arrange)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_a_to_date_past_any_time_where_the_zone_pushes_it_over(self):
+        tz = os.environ.get("TZ")
+
+        def put_back():
+            if tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = tz
+            time.tzset()
+        self.addCleanup(put_back)
+        os.environ["TZ"] = "Asia/Jerusalem"
+        time.tzset()
+
+        def arrange(w):
+            w.to_var.set("9999-12-31")
+            return lambda: w.to_var.set("")
+        self._refused_then_scans_again(arrange)
+
+    def test_a_date_windows_refuses(self):
+        class Windows1900(datetime):
+            def timestamp(self):
+                raise OSError(22, "Invalid argument")
+
+        def arrange(w):
+            p = mock.patch.object(app, "parse_date",
+                                  side_effect=lambda t, end_of_day=False: Windows1900(1900, 1, 1))
+            p.start()
+            self.addCleanup(mock.patch.stopall)
+            return p.stop
+        self._refused_then_scans_again(arrange)
 
 
 def app_messagebox():
