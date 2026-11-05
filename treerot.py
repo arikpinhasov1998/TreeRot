@@ -959,6 +959,35 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
+def icon_pixels():
+    """(width, height, [(r, g, b, a), ...]) of the logo, for a Tk that cannot read PNG itself.
+    Reads only the form the logo is written in: 8-bit RGBA with no row filters."""
+    import base64
+    import struct
+    import zlib
+    png = base64.b64decode(ICON_PNG_B64)
+    width, height, depth, kind = struct.unpack(">IIBB", png[16:26])
+    data, pos = b"", 8
+    while pos < len(png):
+        size, name = struct.unpack(">I4s", png[pos:pos + 8])
+        if name == b"IDAT":
+            data += png[pos + 8:pos + 8 + size]
+        pos += size + 12
+    try:
+        raw = zlib.decompress(data)
+    except zlib.error as e:
+        raise ValueError(str(e))
+    stride = width * 4 + 1
+    if (depth, kind) != (8, 6) or len(raw) != stride * height or any(
+            raw[row * stride] for row in range(height)):
+        raise ValueError("The logo is not in the expected form.")
+    pixels = []
+    for row in range(height):
+        line = raw[row * stride + 1:(row + 1) * stride]
+        pixels.extend(tuple(line[i:i + 4]) for i in range(0, len(line), 4))
+    return width, height, pixels
+
+
 def file_manager_command(path, is_file, platform):
     """Command that shows path in the file manager. A file is only revealed, never run.
     An argv list, except a Windows file: one prebuilt string, because list quoting would wrap
@@ -3283,12 +3312,56 @@ def run_gui(preload=None, on_ready=None):
                         ui["tv"].delete(iid)
             self._jobs_work(ui, work, after)
 
+        def _logo_from_pixels(self, master):
+            """The logo for a Tk that cannot read PNG (before 8.6): clear parts show the window."""
+            width, _, pixels = icon_pixels()
+            bg = [v // 257 for v in master.winfo_rgb(master.cget("background"))]
+            colors = []
+            for r, g, b, a in pixels:
+                colors.append("#%02x%02x%02x" % tuple((c * a + under * (255 - a)) // 255
+                                                      for c, under in zip((r, g, b), bg)))
+            rows = (colors[i:i + width] for i in range(0, len(colors), width))
+            image = tk.PhotoImage(master=master, width=width, height=width)
+            image.put(" ".join("{" + " ".join(row) + "}" for row in rows))
+            return image
+
+        def _logo(self, master):
+            try:
+                return tk.PhotoImage(master=master, data=ICON_PNG_B64)
+            except tk.TclError:
+                pass
+            try:
+                return self._logo_from_pixels(master)
+            except (tk.TclError, ValueError):    # the About box still says everything without it
+                return None
+
         def _about(self):
-            if messagebox.askyesno(f"About {APP_NAME}",
-                                   f"{APP_NAME} {__version__}\n{CREDIT}\n{CREDIT_URL}\n\n"
-                                   "Open this link in your browser?"):
+            win = tk.Toplevel(self)
+            win.title(f"About {APP_NAME}")
+            win.transient(self)
+            win.resizable(False, False)
+            frm = ttk.Frame(win, padding=20)
+            frm.pack(fill="both", expand=True)
+            win.logo = self._logo(win)           # kept here: Tk drops an image nothing refers to
+            if win.logo is not None:
+                ttk.Label(frm, image=win.logo).pack(pady=(0, 10))
+            ttk.Label(frm, text=f"{APP_NAME} {__version__}",
+                      font=("TkDefaultFont", 12, "bold")).pack()
+            ttk.Label(frm, text=CREDIT).pack(pady=(4, 0))
+            ttk.Label(frm, text=CREDIT_URL).pack()
+            btns = ttk.Frame(frm)
+            btns.pack(pady=(14, 0))
+
+            def open_link():
                 import webbrowser
+                win.destroy()
                 webbrowser.open(CREDIT_URL)
+            ttk.Button(btns, text="Open link", command=open_link).pack(side="left", padx=(0, 6))
+            ttk.Button(btns, text="Close", command=win.destroy).pack(side="left")
+            win.bind("<Escape>", lambda e: win.destroy())
+            win.update_idletasks()
+            win.geometry(f"+{self.winfo_rootx() + 160}+{self.winfo_rooty() + 120}")
+            win.grab_set()
 
         def _export(self):
             rows = self.matching

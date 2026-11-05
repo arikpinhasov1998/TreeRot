@@ -1014,6 +1014,114 @@ class LevelChoices(GuiCase):
             self.assertEqual(seen["level"], "20")
 
 
+class AboutBox(GuiCase):
+    def _about_window(self, w):
+        w._about()
+        return [c for c in w.winfo_children()
+                if c.winfo_class() == "Toplevel" and c.title().startswith("About")][-1]
+
+    @staticmethod
+    def _walk(widget):
+        for c in widget.winfo_children():
+            yield c
+            yield from AboutBox._walk(c)
+
+    def test_it_shows_the_logo_and_the_credit(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                win = self._about_window(w)
+                labels = [c for c in self._walk(win) if c.winfo_class() == "TLabel"]
+                seen["images"] = [str(c.cget("image")) for c in labels if str(c.cget("image"))]
+                seen["size"] = (win.logo.width(), win.logo.height())
+                seen["text"] = " ".join(str(c.cget("text")) for c in labels)
+                win.destroy()
+            self.drive(d, check)
+            self.assertEqual(len(seen["images"]), 1)
+            self.assertEqual(seen["size"], (64, 64))
+            for words in (app.APP_NAME, app.__version__, app.CREDIT, app.CREDIT_URL):
+                self.assertIn(words, seen["text"])
+
+    def test_the_logo_can_be_built_where_tk_cannot_read_png(self):
+        # what Tk 8.5 needs; it must also work on the Tk that reads PNG by itself
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+            width, height, pixels = app.icon_pixels()
+
+            def check(w):
+                img = w._logo_from_pixels(w)
+                seen["size"] = (img.width(), img.height())
+                got = img.get(32, 20)
+                seen["pixel"] = tuple(got) if not isinstance(got, str) else tuple(
+                    int(x) for x in got.split())
+                seen["bg"] = tuple(v // 257 for v in w.winfo_rgb(w.cget("background")))
+                corner = img.get(0, 0)
+                seen["corner"] = tuple(corner) if not isinstance(corner, str) else tuple(
+                    int(x) for x in corner.split())
+            self.drive(d, check)
+            self.assertEqual(seen["size"], (64, 64))
+            r, g, b, a = pixels[20 * width + 32]
+            self.assertEqual(a, 255)
+            self.assertEqual(seen["pixel"], (r, g, b))
+            self.assertEqual(pixels[0][3], 0)
+            self.assertEqual(seen["corner"], seen["bg"])     # a clear corner shows the window
+
+    def test_a_tk_that_cannot_read_png_falls_back_and_nothing_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                import tkinter
+                real = tkinter.PhotoImage
+
+                def no_png(*a, **kw):
+                    if kw.get("data"):
+                        raise tkinter.TclError("couldn't recognize image data")
+                    return real(*a, **kw)
+                with mock.patch.object(tkinter, "PhotoImage", no_png):
+                    win = self._about_window(w)
+                seen["size"] = win.logo.width()
+                win.destroy()
+                with mock.patch.object(tkinter, "PhotoImage", no_png), \
+                        mock.patch.object(app, "icon_pixels", side_effect=ValueError("x")):
+                    win = self._about_window(w)
+                seen["no_logo"] = win.logo is None
+                win.destroy()
+            self.drive(d, check)
+            self.assertEqual(seen["size"], 64)
+            self.assertTrue(seen["no_logo"])
+
+    def test_the_link_opens_only_when_asked(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                import webbrowser
+                with mock.patch.object(webbrowser, "open") as op:
+                    win = self._about_window(w)
+                    buttons = {str(c.cget("text")): c for c in self._walk(win)
+                               if c.winfo_class() == "TButton"}
+                    seen["before"] = op.called
+                    buttons["Close"].invoke()
+                    seen["closed"] = not win.winfo_exists()
+                    seen["after_close"] = op.called
+                    win = self._about_window(w)
+                    buttons = {str(c.cget("text")): c for c in self._walk(win)
+                               if c.winfo_class() == "TButton"}
+                    buttons["Open link"].invoke()
+                    seen["url"] = op.call_args[0][0]
+            self.drive(d, check)
+            self.assertFalse(seen["before"])
+            self.assertTrue(seen["closed"])
+            self.assertFalse(seen["after_close"])
+            self.assertEqual(seen["url"], app.CREDIT_URL)
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox
