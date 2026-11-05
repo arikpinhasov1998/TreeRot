@@ -1233,6 +1233,76 @@ class UnreadableSettingsWindow(GuiCase):
                 self.assertEqual(app.load_settings()["path"], d)
 
 
+class DialogGrab(GuiCase):
+    """On Linux a window that is not on screen yet refuses the grab: "grab failed: window not
+    viewable". The dialog must open anyway."""
+
+    def _open_with_grab(self, opening, refusals):
+        import tkinter
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+            grab = mock.Mock(side_effect=[tkinter.TclError("grab failed: window not viewable")] * refusals
+                             + [None])
+
+            def check(w):
+                opening(w)
+                win = [c for c in w.winfo_children() if c.winfo_class() == "Toplevel"][-1]
+                seen["open"] = bool(win.winfo_exists())
+                seen["title"] = win.title()
+
+                target = min(refusals + 1, app.GRAB_TRIES)
+                left = [200]
+
+                def later():                   # slow Tk may run the retries late: wait for them
+                    left[0] -= 1
+                    if grab.call_count < target and left[0] > 0:
+                        w.after(50, later)
+                        return
+                    seen["calls"] = grab.call_count
+                    win.destroy()
+                w.after(50, later)
+            with mock.patch.object(tkinter.Toplevel, "grab_set", grab):
+                self.drive(d, check, lambda: "calls" in seen)
+            return seen
+
+    def test_the_about_box_opens_and_grabs_once_it_can(self):
+        seen = self._open_with_grab(lambda w: w._about(), 2)
+        self.assertTrue(seen["open"])
+        self.assertTrue(seen["title"].startswith("About"))
+        self.assertEqual(seen["calls"], 3)
+
+    def test_the_export_dialog_opens_and_grabs_once_it_can(self):
+        seen = self._open_with_grab(lambda w: w._export_report(), 2)
+        self.assertTrue(seen["open"])
+        self.assertEqual(seen["title"], "Export report")
+        self.assertEqual(seen["calls"], 3)
+
+    def test_a_grab_that_never_works_stops_trying_and_the_dialog_stays(self):
+        seen = self._open_with_grab(lambda w: w._about(), 1000)
+        self.assertTrue(seen["open"])
+        self.assertEqual(seen["calls"], app.GRAB_TRIES)
+
+    def test_a_dialog_closed_before_the_grab_is_left_alone(self):
+        import tkinter
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+            grab = mock.Mock(side_effect=[tkinter.TclError("not viewable")] + [None] * 5)
+
+            def check(w):
+                w._about()
+                win = [c for c in w.winfo_children() if c.winfo_class() == "Toplevel"][-1]
+                win.destroy()
+
+                def later():
+                    seen["calls"] = grab.call_count
+                w.after(300, later)
+            with mock.patch.object(tkinter.Toplevel, "grab_set", grab):
+                self.drive(d, check, lambda: "calls" in seen)
+            self.assertEqual(seen["calls"], 1)
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox

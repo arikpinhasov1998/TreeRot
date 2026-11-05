@@ -1031,6 +1031,7 @@ def file_manager_command(path, is_file, platform):
 LISTING_TIMEOUT = 30                  # seconds before a silent folder listing is abandoned
 MAX_ABANDONED = 16                    # abandoned listing threads allowed to pile up
 FILE_THREADS = 4                      # file listings read at the same time
+GRAB_TRIES, GRAB_RETRY_MS = 20, 50    # how long a new dialog waits to come on screen for its grab
 FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 
 
@@ -2982,7 +2983,18 @@ def run_gui(preload=None, on_ready=None):
             win.bind("<Escape>", lambda e: win.destroy())
             win.update_idletasks()
             win.geometry(f"+{self.winfo_rootx() + 160}+{self.winfo_rooty() + 120}")
-            win.grab_set()
+            self._grab_when_viewable(win)
+
+        def _grab_when_viewable(self, win, tries=None):
+            """Makes a dialog modal. Linux refuses the grab until the window is on screen, so this
+            tries again from the event loop. A dialog that never gets it still works, not modal."""
+            tries = GRAB_TRIES if tries is None else tries
+            try:
+                if win.winfo_exists():
+                    win.grab_set()
+            except tk.TclError:
+                if tries > 1:
+                    self.after(GRAB_RETRY_MS, self._grab_when_viewable, win, tries - 1)
 
         def _save_report(self, fmt, pdf_tree, browser):
             ext = ".pdf" if fmt == "pdf" else ".html"
@@ -3394,7 +3406,7 @@ def run_gui(preload=None, on_ready=None):
             win.bind("<Escape>", lambda e: win.destroy())
             win.update_idletasks()
             win.geometry(f"+{self.winfo_rootx() + 160}+{self.winfo_rooty() + 120}")
-            win.grab_set()
+            self._grab_when_viewable(win)
 
         def _export(self):
             rows = self.matching
