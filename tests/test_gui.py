@@ -942,6 +942,36 @@ class ScanFolderCheck(GuiCase):
             self.drive(d, check)
 
 
+class OpenPath(GuiCase):
+    def _is_file_for(self, make_row):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                w.tree.selection_set(make_row(w, d))
+                with mock.patch.object(app, "file_manager_command",
+                                       return_value=["x"]) as cmd, \
+                        mock.patch.object(app.subprocess, "Popen") as popen:
+                    w._open_path()
+                seen["is_file"] = cmd.call_args[0][1]
+                seen["ran"] = popen.call_args[0][0]
+            self.drive(d, check)
+            self.assertEqual(seen["ran"], ["x"])
+            return seen["is_file"]
+
+    def test_a_real_folder_opens(self):
+        self.assertFalse(self._is_file_for(lambda w, d: d))
+
+    def test_a_path_that_cannot_be_checked_is_revealed_never_run(self):
+        def vanished(w, d):
+            import shutil
+            shutil.rmtree(os.path.join(d, "a"))
+            w._populate(d)
+            return os.path.join(d, "a")
+        self.assertTrue(self._is_file_for(vanished))
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox

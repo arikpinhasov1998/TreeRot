@@ -967,7 +967,9 @@ def file_manager_command(path, is_file, platform):
     if platform.startswith("win"):
         return f'explorer /select,"{path}"' if is_file else None
     if platform == "darwin":
-        return ["open", "-R", path] if is_file else ["open", path]
+        # A .app is a folder, but "open" would launch it.
+        bundle = path.rstrip("/").lower().endswith(".app")
+        return ["open", "-R", path] if is_file or bundle else ["open", path]
     return ["xdg-open", os.path.dirname(path) if is_file else path]
 
 
@@ -2807,7 +2809,8 @@ def run_gui(preload=None, on_ready=None):
             if not sel:
                 return
             path = self._path_of(sel[0])
-            is_file = sel[0].startswith((FILE_IID, FILEERR_IID)) or os.path.isfile(path)
+            # Fails closed: what cannot be confirmed as a folder is revealed, never run.
+            is_file = sel[0].startswith((FILE_IID, FILEERR_IID)) or not os.path.isdir(path)
             argv = file_manager_command(path, is_file, sys.platform)
             try:
                 if argv is None:
