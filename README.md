@@ -18,10 +18,12 @@ At the end of a scan you see how much storage is used, unused and empty. Export 
 **report** as HTML (interactive: open folders, search, filter) or PDF (fixed pages to print or send).
 It runs on Windows, Linux and macOS, with a window or from the command line (for servers).
 
-**What has and has not been tested.** The automatic tests run on the developer's Mac. GitHub's
-build runs the same tests on Windows, Linux and macOS before it builds anything, but the Windows
-features listed under [Check on a real Windows server](#check-on-a-real-windows-server) have
-never been tried on a real Windows server. Please run that checklist before you rely on them.
+**What has and has not been tested.** The automatic tests have so far been run only on the
+developer's Mac. GitHub's build is set up to run the same tests on Windows, Linux and macOS
+before it builds anything, but that workflow has not run yet, so nothing is proven on those
+systems. The Windows features listed under
+[Check on a real Windows server](#check-on-a-real-windows-server) have not been tried on a real
+Windows server. Please run that checklist before you rely on them.
 
 ## Download
 
@@ -204,8 +206,11 @@ you prefer to see every setting. It does not need the TreeRot window. A task mad
    scans. Leave **Allow task to be run on demand** ticked.
 6. Click **OK**. Windows asks for your password; this is Windows' own dialog.
 7. Right-click the new task in the list and choose **Run**. The **Last Run Result** column shows
-   `0x0` when it succeeded. Names that contain `%` or `$(` are fine here; type them in the
-   arguments as they are.
+   `0x0` when it succeeded.
+
+**Avoid `%NAME%` and `$(...)` in paths here as well.** Task Scheduler may expand them in the
+arguments and change the path, and this has not been tested. If your folder name has them, scan
+its parent folder instead, or rename the folder.
 
 A task does not keep the program's text output. The report is the result; add `--status-file
 C:\reports\share.status.json` if you also want a small file that shows progress while it runs.
@@ -237,7 +242,7 @@ nohup ./treerot /srv/share --from 2024-11-04 --format summary --report share.htm
 tmux new -s scan './treerot /srv/share --from 2024-11-04 --format summary --report share.html'
 
 # systemd (Linux): runs as its own unit; follow it with journalctl
-systemd-run --user --unit=treerot-scan ./treerot /srv/share --from 2024-11-04 --format summary --report /srv/reports/share.html
+systemd-run --user --unit=treerot-scan /opt/treerot/treerot /srv/share --from 2024-11-04 --format summary --report /srv/reports/share.html
 journalctl --user -u treerot-scan -f
 
 # launchd (macOS): a one-off job; remove it when it is done
@@ -245,7 +250,8 @@ launchctl submit -l treerot-scan -o scan.log -e scan.log -- /path/to/treerot /sr
 launchctl remove treerot-scan
 ```
 
-Use full paths with `systemd-run` and `launchd`, because they do not start in your current
+Use full paths with `systemd-run` and `launchd` (change `/opt/treerot/treerot` to where you
+unpacked the program), because they do not start in your current
 folder. To keep a `--user` systemd unit running after you log out, run `loginctl enable-linger`
 once. These commands were written for this README and have not all been run on every system.
 
@@ -282,8 +288,10 @@ developer what differed. Each step says what should happen. Use a test folder fi
 8. Run it again and type a **wrong password**. *The console shows Windows' error and waits for a
    key; the TreeRot window then says the task could not be created and points at the README.*
    Try closing the console without pressing a key: *this counts as a failure.*
-9. Use an account that does **not** have the "Log on as a batch job" right (a typical
-   restricted account). *The error in the console, or the panel, gives a reason you can understand.*
+9. Ask your Windows administrator for an account that is **not allowed to run tasks while logged
+   off** (in Windows this permission is called "Log on as a batch job"; a locked-down account often
+   lacks it). Try **Run in background...** with it. *You should see a reason you can understand,
+   in the console window or in **Background scans**. Write down the exact words if it is unclear.*
 10. With a scan running in the background, close the RDP window. *The scan keeps running.* Then log
     off and log back on and open TreeRot: *Background scans still lists it, with progress, and
     **Open report** works when it has finished.*
@@ -298,7 +306,9 @@ developer what differed. Each step says what should happen. Use a test folder fi
     and writes the report.*
 15. Run a background scan with a **PDF** report. *The PDF is made even though no one is logged
     on.* If not, note the message: it names each browser that failed.
-16. If you use Azure AD / Entra ID accounts (`AzureAD\name`), try **Password** logon with one.
+16. *Only if your company signs in with Microsoft work accounts (Azure AD, now called Entra ID;
+    the user name looks like `AzureAD\name`):* try **Run in background...** with such an account.
+    *It works, or it shows a clear reason why not.*
 
 **C. Smaller things not yet seen on Windows**
 
@@ -307,8 +317,8 @@ developer what differed. Each step says what should happen. Use a test folder fi
     started and let you **Remove** it.
 19. In the panel, a task Windows could not start should show a reason in plain words
     (for example "the password has expired").
-20. Run the program's tests on the server if Python is installed:
-    `python -m unittest discover -s tests -v`. *All pass.*
+20. *Optional, for developers:* if Python is installed on the server, open a Command Prompt in the
+    TreeRot folder and run `python -m unittest discover -s tests -v`. *Every test passes.*
 
 ## Run from source
 
@@ -332,8 +342,9 @@ python3 -m unittest discover -s tests -v
 
 The window tests skip themselves when there is no display. On a Linux server without a desktop
 use `xvfb-run -a python3 -m unittest discover -s tests -v`. The suite takes several minutes.
-GitHub runs it on Windows, Linux and macOS, on Python 3.13 and 3.8 where GitHub offers 3.8,
-before it builds anything, and a failure stops the build.
+The GitHub workflow is set up to run it on Windows, Linux and macOS, on Python 3.13 and
+3.8 where GitHub offers 3.8, before it builds anything, so that a failure stops the build. It has
+not run yet.
 
 ## Build the programs yourself
 
@@ -360,9 +371,9 @@ GitHub builds every version for you (see `.github/workflows/release.yml`):
    git tag v1.2.0
    git push origin v1.2.0
    ```
-3. GitHub Actions runs the tests on Windows, Linux and macOS, then builds the Windows, Linux and
-   macOS (Apple Silicon and Intel) versions on their own systems, checks that each one starts and
-   can scan a folder, and publishes them with `SHA256SUMS.txt` as a new release. The build stops if
+3. GitHub Actions is set up to run the tests on Windows, Linux and macOS, then to build the
+   Windows, Linux and macOS (Apple Silicon and Intel) versions on their own systems, check that each one starts and
+   can scan a folder, and publish them with `SHA256SUMS.txt` as a new release. The build stops if
    a test fails or if the tag does not match `__version__`.
 
 To test the builds without publishing, open the **Actions** tab, choose **Build and release** and

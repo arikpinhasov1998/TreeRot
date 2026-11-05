@@ -49,6 +49,22 @@ class Readme(unittest.TestCase):
             self.assertNotIn(bad, text)
 
 
+    def test_the_manual_route_does_not_call_expanding_names_fine(self):
+        text = self._readme()
+        self.assertNotIn("are fine here", text)
+        self.assertIn("Avoid `%NAME%` and `$(...)` in paths here as well", text)
+
+    def test_the_readme_does_not_say_ci_has_run(self):
+        text = " ".join(self._readme().split())
+        for bad in ("build runs the same tests", "GitHub runs it on", "have never been tried",
+                    "Actions runs the tests"):
+            self.assertNotIn(bad, text)
+
+    def test_the_no_browser_message_lists_every_browser_tried(self):
+        for name in ("Edge", "Chrome", "Chromium", "Brave"):
+            self.assertIn(name, app.NO_BROWSER_MSG)
+
+
 class Migration(unittest.TestCase):
     def test_old_settings_read_once_and_old_file_kept(self):
         with tempfile.TemporaryDirectory() as d:

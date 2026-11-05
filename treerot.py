@@ -3360,8 +3360,8 @@ class ReportCanceled(ReportError):
 
 
 NO_BROWSER_MSG = (
-    "A PDF report is made by printing the report with Microsoft Edge, Google Chrome or "
-    "Chromium, and none of them was found on this computer. Save the report as HTML "
+    "A PDF report is made by printing the report with Microsoft Edge, Google Chrome, "
+    "Chromium or Brave, and none of them was found on this computer. Save the report as HTML "
     "instead (it prints to PDF from any browser), install one of those browsers, or point "
     "to one with --browser PATH.")
 
