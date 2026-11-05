@@ -27,6 +27,28 @@ class Branding(unittest.TestCase):
         self.assertTrue(app.ICON_PNG_B64.startswith("iVBOR"))
 
 
+class Readme(unittest.TestCase):
+    SECTION = "Set up a background scan by hand"
+
+    def _readme(self):
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_section_the_window_points_at_exists(self):
+        import re
+        self.assertRegex(self._readme(), r"(?m)^#{2,3} " + re.escape(self.SECTION) + r"$")
+
+    def test_the_failure_messages_name_that_section(self):
+        with self.assertRaises(app.BackgroundError) as c:
+            app.task_create_command("T", "x.xml", "a&b", platform="win32", environ={})
+        self.assertIn(self.SECTION, str(c.exception))
+
+    def test_no_personal_or_temporary_path_in_the_readme(self):
+        text = self._readme()
+        for bad in ("/Users/", "/home/", "C:\\Users", "/tmp/", "/private/"):
+            self.assertNotIn(bad, text)
+
+
 class Migration(unittest.TestCase):
     def test_old_settings_read_once_and_old_file_kept(self):
         with tempfile.TemporaryDirectory() as d:

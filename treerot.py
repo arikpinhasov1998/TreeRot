@@ -1152,7 +1152,7 @@ def task_create_command(task, xml_name, user, platform=None, environ=None):
     if _CMD_SPECIAL.search(user):
         raise BackgroundError(
             f"Your Windows user name ({user}) has a character that cannot be passed safely to "
-            "Windows' password prompt. The README shows how to set this up by hand.")
+            "Windows' password prompt. The README section \"Set up a background scan by hand\" shows another way.")
     shell, exe = cmd_exe(platform, environ), schtasks_exe(platform, environ)
     if _CMD_SPECIAL.search(shell + exe + task + xml_name):
         raise BackgroundError(f"The Windows folder or task name cannot be passed safely: {shell}")
@@ -1360,7 +1360,7 @@ def start_background_scan(root, args, report, runner=None):
         if res.returncode != 0:
             raise BackgroundError(
                 "The background task could not be created. The reason is in the console window "
-                "that asked for your password. The README shows how to set this up by hand.")
+                "that asked for your password. The README section \"Set up a background scan by hand\" shows another way.")
     except Exception:
         _forget_job(job_id)
         raise
