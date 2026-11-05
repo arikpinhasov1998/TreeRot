@@ -41,6 +41,11 @@ case "$(uname -s)" in
     "$VPY" -m PyInstaller --noconfirm --clean --windowed --onedir $ICON_ARGS \
       --name TreeRot --osx-bundle-identifier io.github.arikpinhasov1998.treerot \
       treerot.py
+    # PyInstaller leaves the app's version at 0.0.0. Changing Info.plist voids the signature, so sign again.
+    VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' treerot.py)"
+    plutil -replace CFBundleShortVersionString -string "$VERSION" dist/TreeRot.app/Contents/Info.plist
+    plutil -replace CFBundleVersion -string "$VERSION" dist/TreeRot.app/Contents/Info.plist
+    codesign --force --deep --sign - dist/TreeRot.app
     # The CLI gets its own folders: on case-insensitive disks "treerot" and "TreeRot" are the same name.
     "$VPY" -m PyInstaller --noconfirm --onefile \
       --distpath dist/cli --workpath build/cli --specpath build/cli \
