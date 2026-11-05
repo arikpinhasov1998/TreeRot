@@ -363,8 +363,48 @@ class Jobs(JobCase):
                 with open(os.path.join(app.JOBS_DIR, n), encoding="utf-8") as f:
                     self.assertNotIn("password", f.read().lower())
 
+    def test_a_failed_create_deletes_any_task_then_forgets_it(self):
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            if "/Query" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, b'"\\Other","N/A","Ready"\r\n', b"")
+            return subprocess.CompletedProcess(cmd, 1, b"", b"x")
+        with self.assertRaises(app.BackgroundError) as c:
+            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
+        self.assertIn("could not be created", str(c.exception))
+        self.assertTrue(any("/Delete" in cmd for cmd in cmds), cmds)
+        self.assertEqual(app.load_jobs(), [])
+
+    def test_a_failed_create_that_may_have_left_a_task_keeps_the_record(self):
+        names = []
+
+        def runner(cmd, **kw):
+            if "/Delete" in cmd:
+                names.append(cmd[cmd.index("/TN") + 1])
+            if "/Query" in cmd:
+                listing = '"\\%s","N/A","Ready"\r\n' % names[-1]
+                return subprocess.CompletedProcess(cmd, 0, listing.encode(), b"")
+            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
+        with self.assertRaises(app.BackgroundError) as c:
+            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
+        self.assertIn("Background scans", str(c.exception))
+        jobs = app.load_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertNotIn("creating", jobs[0])                # Remove must work on it
+
+    def test_a_failed_create_where_the_list_cannot_be_read_keeps_the_record(self):
+        def runner(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
+        with self.assertRaises(app.BackgroundError):
+            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
+        self.assertEqual(len(app.load_jobs()), 1)
+
     def test_create_failure_raises_with_windows_message(self):
         def fail(cmd, **kw):
+            if "/Query" in cmd:                  # Windows answers: no such task
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
             return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
         with self.assertRaises(app.BackgroundError) as c:
             app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=fail)
@@ -562,10 +602,10 @@ class Jobs(JobCase):
 
         def cancel(cmd, **kw):
             cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 1, b"", b"")
+            return subprocess.CompletedProcess(cmd, 0 if "/Query" in cmd else 1, b"", b"")
         with self.assertRaises(app.BackgroundError):
             app.start_background_scan("\\\\srv\\s", [], first["report"], runner=cancel)
-        self.assertEqual(len(cmds), 1)
+        self.assertFalse(any("/Run" in cmd for cmd in cmds), cmds)
         self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
         self.assertEqual(app.job_report(first), first["report"])
 

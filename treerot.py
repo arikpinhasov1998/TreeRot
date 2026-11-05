@@ -1373,11 +1373,6 @@ def start_background_scan(root, args, report, runner=None):
     try:
         write_task_xml(xml_path, xml_text)
         res = create(command, cwd=JOBS_DIR)
-        if res.returncode != 0:
-            raise BackgroundError(
-                "The background task could not be created. Windows showed the reason in the "
-                "console window that just closed. Try again to see it, or use the README section "
-                "\"Set up a background scan by hand\".")
     except Exception:
         _forget_job(job_id)
         raise
@@ -1386,6 +1381,11 @@ def start_background_scan(root, args, report, runner=None):
             os.remove(xml_path)
         except OSError:
             pass
+    if res.returncode != 0:              # a failure here may still leave a task holding a password
+        raise _take_back(job, run, BackgroundError(
+            "The background task could not be created. Windows showed the reason in the "
+            "console window that just closed. Try again to see it, or use the README section "
+            "\"Set up a background scan by hand\"."))
     try:
         _clear_the_way(status_file, job_id, runner)
         del job["creating"]
