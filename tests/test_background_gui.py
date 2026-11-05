@@ -206,6 +206,26 @@ class Panel(BackgroundGui):
                 self.wait(w, lambda: self.row(w, good) == "Running", good_shown)
             self.run_case(check)
 
+    def test_a_silent_scan_shows_why_and_asks_off_the_tk_thread(self):
+        job = self.start()
+        app._save_job(dict(job, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+        threads = []
+
+        def query(cmd):
+            threads.append(threading.current_thread())
+            line = '"H","\\\\T","N/A","Ready","M","T","-2147023570"\r\n'
+            return subprocess.CompletedProcess(cmd, 0, line.encode(), b"")
+        with mock.patch.object(app, "_quiet_run", query):
+            def check(w):
+                w._jobs_panel()
+
+                def shown():
+                    self.assertIn("0x8007052E", w._jobs_ui["tv"].set(job["id"], "detail"))
+                    self.assertNotIn(self.tk_thread, threads)
+                    self.finish()
+                self.wait(w, lambda: self.row(w, job) == "Not started", shown)
+            self.run_case(check)
+
     def test_refresh_keeps_the_selection_and_follows_changes(self):
         job = self.start()
 

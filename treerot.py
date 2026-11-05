@@ -971,6 +971,16 @@ STARTING_GRACE_SECONDS = 300            # no status after this long: the task di
 SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
 JOBS_REFRESH_MS = 5000                  # how often the open panel looks at the scans again
 JOB_LIVE = ("starting", "silent", "running", "stalled")     # may still have a process to end
+TASK_NOT_YET_RUN, TASK_RUNNING = 267011, 267009      # a task's Last Result: 0x41303, 0x41301
+TASK_RESULT_WORDS = {
+    0x80070569: "Windows would not start the task: your account lacks the right to "
+                "\"log on as a batch job\". An administrator can grant it",
+    0x8007052E: "Windows would not start the task: the user name or password it has stored is "
+                "wrong. Remove this scan and start it again",
+    0x80070005: "Windows would not start the task: access was denied",
+    0x80070002: "Windows could not find the program the task should run",
+    0x00041306: "The task was stopped",
+}
 CREATING_LIMIT_SECONDS = 900            # a password prompt older than this was left or abandoned
 JOB_LABELS = {"creating": "Password", "starting": "Starting", "silent": "Not started", "running": "Running",
               "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed"}
@@ -1180,8 +1190,12 @@ def _quiet_run(cmd):
 
 
 def _windows_text(res):
-    """What schtasks printed, if it was captured. It writes in the console's code page."""
-    out = getattr(res, "stderr", b"") or getattr(res, "stdout", b"") or b""
+    """What schtasks printed, if it was captured."""
+    return _windows_text_of(getattr(res, "stderr", b"") or getattr(res, "stdout", b"") or b"")
+
+
+def _windows_text_of(out):
+    """schtasks writes in the console's code page."""
     try:
         return out.decode("oem", "replace").strip()
     except LookupError:                 # there is no such codec outside Windows
@@ -1434,6 +1448,46 @@ def job_row(job):
                            "or the share may have stopped answering.", None)
     parts = (s.get("percent"), s.get("counts"), s.get("times"))
     return "running", "  ".join(str(x) for x in parts if x) or "Running.", None
+
+
+def _task_last_result(task, run):
+    """The task's Last Result as an unsigned 32-bit number, or None if that can't be told for
+    certain. It is the 7th column whatever the system's language."""
+    res = run([schtasks_exe(), "/Query", "/TN", task, "/V", "/FO", "CSV", "/NH"])
+    if res.returncode != 0:
+        return None
+    rows = list(csv.reader(_windows_text_of(res.stdout).splitlines()))
+    code = int(rows[0][6], 0)
+    return code & 0xFFFFFFFF if -0x80000000 <= code <= 0xFFFFFFFF else None
+
+
+def _task_start_problem(task, run):
+    """Plain words for why a task has not produced a scan, or None if there is nothing to add."""
+    try:
+        code = _task_last_result(task, run)
+    except (BackgroundError, OSError, ValueError, IndexError, csv.Error):
+        return None                      # from memory of schtasks' output: never trusted blindly
+    if code is None or code in (0, TASK_NOT_YET_RUN):
+        return None
+    if code == TASK_RUNNING:
+        return ("Windows says the task is running, but the scan has written no status. "
+                "The report's folder may be out of reach.")
+    words = TASK_RESULT_WORDS.get(code)
+    if words:
+        return f"{words} (code 0x{code:X})"
+    if code < 0x10000:                   # the program's own exit code, not a refusal by Windows
+        return f"The task ended before the scan could write its status (code 0x{code:X})."
+    return f"Windows could not start the task (code 0x{code:X})."
+
+
+def job_panel_row(job, runner=None):
+    """job_row, and for a scan that never got going, what Windows says about it."""
+    row = job_row(job)
+    if row[0] == "silent":
+        problem = _task_start_problem(job["task"], runner or _quiet_run)
+        if problem:
+            return row[0], problem, row[2]
+    return row
 
 
 def job_state(job):
@@ -3021,7 +3075,7 @@ def run_gui(preload=None, on_ready=None):
 
             def work():
                 try:
-                    row = job_row(job)
+                    row = job_panel_row(job)
                 except Exception as e:
                     row = ("failed", f"Could not read this scan's status: {e}", None)
                 q.put(("job_row", gen, job["id"], row))

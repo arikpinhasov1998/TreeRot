@@ -320,6 +320,10 @@ class JobCase(unittest.TestCase):
         p = mock.patch.object(app, "JOBS_DIR", os.path.join(d.name, "jobs"))
         p.start()
         self.addCleanup(p.stop)
+        for name in ("_quiet_run", "_console_run"):      # never the real schtasks, on any system
+            q = mock.patch.object(app, name, side_effect=app.BackgroundError("not in a test"))
+            q.start()
+            self.addCleanup(q.stop)
         e = mock.patch.dict(os.environ, {"USERNAME": "me", "USERDOMAIN": "DOM"})
         e.start()
         self.addCleanup(e.stop)
@@ -698,6 +702,99 @@ class JobStates(JobCase):
         self.write_status(job, updated=time.time() - 3600)
         app.end_job(job, runner=self.run_ok)
         self.assertEqual(app.job_state(app.load_jobs()[0])[0], "ended")
+
+
+class WhyNotStarted(JobCase):
+    def silent(self):
+        job = self.start("r%s.html" % os.urandom(3).hex())
+        record = dict(job, started=time.time() - app.STARTING_GRACE_SECONDS - 1)
+        app._save_job(record)
+        return record
+
+    def row(self, line, rc=0):
+        """A row the way /Query /V /FO CSV /NH prints it, with this Last Result."""
+        job = self.silent()
+        self.queries = []
+
+        def runner(cmd, **kw):
+            self.queries.append(cmd)
+            return subprocess.CompletedProcess(cmd, rc, line.encode(), b"")
+        return app.job_panel_row(job, runner=runner)
+
+    @staticmethod
+    def csv_line(result):
+        return ('"HOST","\\TreeRot-x","N/A","Ready","Interactive/Background","11/5/2026 1:00:00 AM",'
+                '"%s","DOM\\me","C:\\x, y.exe"\r\n' % result)
+
+    def test_asks_for_exactly_this_task(self):
+        job = self.silent()
+        self.queries = []
+
+        def runner(cmd, **kw):
+            self.queries.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, self.csv_line("267011").encode(), b"")
+        app.job_panel_row(job, runner=runner)
+        self.assertEqual(self.queries, [[app.schtasks_exe(), "/Query", "/TN", job["task"],
+                                         "/V", "/FO", "CSV", "/NH"]])
+
+    def test_known_codes_get_plain_words(self):
+        for result, words in (("-2147023511", "log on as a batch job"), ("2147943785", "log on as a batch job"),
+                              ("-2147023570", "password"), ("2147943726", "password")):
+            with self.subTest(result=result):
+                state, detail, report = self.row(self.csv_line(result))
+                self.assertEqual(state, "silent")
+                self.assertIn(words, detail)
+                self.assertRegex(detail, r"0x8007(0569|052E)")
+                self.assertIsNone(report)
+
+    def test_other_codes_are_shown_in_hex(self):
+        detail = self.row(self.csv_line("-2147024629"))[1]
+        self.assertIn("Windows could not start the task (code 0x8007010B)", detail)
+
+    def test_a_small_code_is_the_program_ending_not_windows_refusing(self):
+        detail = self.row(self.csv_line("2"))[1]
+        self.assertIn("code 0x2", detail)
+        self.assertNotIn("could not start", detail)
+
+    def test_not_yet_run_and_success_keep_the_usual_message(self):
+        usual = self.row("no rows")[1]
+        for result in ("267011", "0"):
+            with self.subTest(result=result):
+                self.assertEqual(self.row(self.csv_line(result))[1], usual)
+
+    def test_running_is_not_an_error(self):
+        detail = self.row(self.csv_line("267009"))[1]
+        self.assertNotIn("could not", detail)
+        self.assertIn("running", detail)
+
+    def test_anything_unexpected_keeps_the_usual_message(self):
+        usual = self.row("no rows")[1]
+        for line in ("", "a,b,c", self.csv_line("Ready"), self.csv_line(""), self.csv_line("1.5"),
+                     "\x00\x01", self.csv_line("99999999999999999999")):
+            with self.subTest(line=line):
+                self.assertEqual(self.row(line)[1], usual)
+        self.assertEqual(self.row(self.csv_line("-2147024891"), rc=1)[1], usual)
+
+    def test_scheduler_trouble_keeps_the_usual_message(self):
+        usual = self.row("no rows")[1]
+        job = self.silent()
+        for error in (app.BackgroundError("no answer"), OSError("no schtasks")):
+            def runner(cmd, **kw):
+                raise error
+            with self.subTest(error=error):
+                self.assertEqual(app.job_panel_row(job, runner=runner)[1], usual)
+
+    def test_only_a_silent_scan_asks_windows(self):
+        job = self.start()
+        self.queries = []
+
+        def runner(cmd, **kw):
+            self.queries.append(cmd)
+            raise AssertionError("asked")
+        self.assertEqual(app.job_panel_row(job, runner=runner)[0], "starting")
+        self.write_status(job)
+        self.assertEqual(app.job_panel_row(job, runner=runner)[0], "running")
+        self.assertEqual(self.queries, [])
 
 
 class JobReport(JobCase):
