@@ -137,17 +137,34 @@ SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".treerot.json")
 OLD_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
 
 
+def read_settings():
+    """The saved settings, {} if there truly are none, or None if they exist but could not be
+    read. Saving over None would wipe them, so a caller that will save must check for it."""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        if not os.path.isdir(os.path.dirname(SETTINGS_FILE)):   # a dead share reads as "no such file"
+            return None
+    except (OSError, ValueError):
+        return None
+    else:
+        return data if isinstance(data, dict) else None
+    try:                                  # first run under this name: bring the old settings over
+        with open(OLD_SETTINGS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    save_settings(data)
+    return data
+
+
 def load_settings():
-    for path, migrating in ((SETTINGS_FILE, False), (OLD_SETTINGS_FILE, True)):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if migrating:
-            save_settings(data)
-        return data
-    return {}
+    """The saved settings for reading only: {} if they cannot be read."""
+    data = read_settings()
+    return {} if data is None else data
 
 
 def save_settings(data):
@@ -1659,7 +1676,13 @@ def run_gui(preload=None, on_ready=None):
             self.n_excluded = 0
             self.scan_elapsed = None
             self.meter = None
-            self.settings = load_settings()
+            self.settings = read_settings()
+            self.settings_note = ""   # says why nothing will be saved in this session
+            self._settings_savable = self.settings is not None
+            if self.settings is None:
+                self.settings = {}
+                self.settings_note = (f"Your saved settings could not be read ({SETTINGS_FILE}). "
+                                      "Changes will not be saved. Restart TreeRot to try again.")
             self._bg_token = 0        # the newest "Run in background" press; older checks are ignored
             self._scan_token = 0      # a folder still being checked before a scan
             self._scan_checking = False
@@ -1906,7 +1929,8 @@ def run_gui(preload=None, on_ready=None):
             self.menu.add_command(label="Exclude this folder (applies on next scan)",
                                   command=self._exclude_selected)
 
-            self.status_var = tk.StringVar(value="Pick a folder or network share and click Scan.")
+            self.status_var = tk.StringVar(
+                value=self.settings_note or "Pick a folder or network share and click Scan.")
             ttk.Label(self, textvariable=self.status_var, relief="sunken",
                       anchor="w", padding=4).pack(fill="x", side="bottom")
 
@@ -2012,7 +2036,8 @@ def run_gui(preload=None, on_ready=None):
                 "precount": bool(self.precount_var.get()),
                 "count_created": bool(self.created_var.get()),
             })
-            save_settings(self.settings)
+            if self._settings_savable:     # never over settings that could not be read
+                save_settings(self.settings)
 
         REPORT_JOIN_SECONDS = 10
 
@@ -5064,9 +5089,10 @@ def _run_cli(a, root, status=None):
                       "modified or created" if uses_created else "modified")
     if rows:                                # finished: remember totals for the next progress bar
         root_info = next(r["info"] for r in rows if r["info"].parent is None)
-        settings = load_settings()          # the window may have saved during a long scan
-        remember_totals(settings, tkey, len(rows), root_info.total_files)
-        save_settings(settings)
+        settings = read_settings()          # the window may have saved during a long scan
+        if settings is not None:            # never over settings that could not be read
+            remember_totals(settings, tkey, len(rows), root_info.total_files)
+            save_settings(settings)
     if status and not rows:
         status.report = None                # no report is written without rows: claim none
     sm = summarize(rows, stats.get("excluded", 0), elapsed=time.monotonic() - t0)

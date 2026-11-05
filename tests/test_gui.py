@@ -1195,6 +1195,44 @@ class OutOfRangeDate(GuiCase):
         self._refused_then_scans_again(arrange)
 
 
+class UnreadableSettingsWindow(GuiCase):
+    def test_a_window_that_could_not_read_the_settings_does_not_save_over_them(self):
+        kept = '{"excludes": ["keep me"], "last_totals": {"k": [1, 2]}}'
+        real = open
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            path = os.path.join(d, ".treerot.json")
+            with real(path, "w", encoding="utf-8") as f:
+                f.write(kept)
+            seen = {}
+
+            def fake(file, mode="r", *a, **kw):
+                if file == path and "r" in mode:
+                    raise PermissionError(13, "Sharing violation", file)
+                return real(file, mode, *a, **kw)
+
+            def check(w):
+                w.ex_list.insert("end", "typed in this session")
+                w._save_settings()
+                seen["note"] = w.settings_note
+            with mock.patch.object(app, "SETTINGS_FILE", path), mock.patch("builtins.open", fake):
+                self.drive(d, check)
+            with real(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), kept)
+            self.assertIn(path, seen["note"])
+
+    def test_a_window_with_a_missing_file_saves_as_usual(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            path = os.path.join(d, ".treerot.json")
+
+            def check(w):
+                w._save_settings()
+            with mock.patch.object(app, "SETTINGS_FILE", path):
+                self.drive(d, check)
+                self.assertEqual(app.load_settings()["path"], d)
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox
