@@ -1375,8 +1375,9 @@ def start_background_scan(root, args, report, runner=None):
         res = create(command, cwd=JOBS_DIR)
         if res.returncode != 0:
             raise BackgroundError(
-                "The background task could not be created. The reason is in the console window "
-                "that asked for your password. The README section \"Set up a background scan by hand\" shows another way.")
+                "The background task could not be created. Windows showed the reason in the "
+                "console window that just closed. Try again to see it, or use the README section "
+                "\"Set up a background scan by hand\".")
     except Exception:
         _forget_job(job_id)
         raise

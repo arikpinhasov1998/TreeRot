@@ -369,8 +369,11 @@ class Jobs(JobCase):
         with self.assertRaises(app.BackgroundError) as c:
             app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=fail)
         self.assertIn("could not be created", str(c.exception))
-        self.assertIn("console window", str(c.exception))
-        self.assertIn("README", str(c.exception))
+        text = str(c.exception)
+        self.assertIn("console window that just closed", text)   # it is gone by now
+        self.assertNotIn("is in the console window", text)
+        self.assertIn("Try again", text)
+        self.assertIn("Set up a background scan by hand", text)
         self.assertEqual(app.load_jobs(), [])
 
     def test_states(self):
