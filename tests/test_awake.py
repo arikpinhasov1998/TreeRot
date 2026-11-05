@@ -1,10 +1,12 @@
 import contextlib
 import io
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -67,6 +69,67 @@ class Awake(unittest.TestCase):
                         mock.patch("sys.stderr", err), mock.patch("sys.stdout", io.StringIO()):
                     app.main(["--cli", d, "--progress", "none", "--format", "csv"] + extra)
                 self.assertEqual("NOSLEEP-NOTE" in err.getvalue(), expect, extra)
+
+
+def gone(pid, wait=5):
+    """True once no process has this pid (polls for up to `wait` seconds)."""
+    end = time.monotonic() + wait
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@unittest.skipIf(sys.platform == "win32", "POSIX shell and process groups")
+class LinuxHelper(unittest.TestCase):
+    def test_stopping_ends_the_forked_child_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "systemd-inhibit")
+            with open(fake, "w") as f:       # forks its command (does not exec it), like the real one
+                f.write('#!/bin/sh\nwhile [ "${1#--}" != "$1" ]; do shift; done\n'
+                        '"$@" &\necho $$ $! > "$PIDS"\nwait\n')
+            os.chmod(fake, 0o755)
+            pids = os.path.join(d, "pids")
+            env = {"PATH": d + os.pathsep + os.environ["PATH"], "PIDS": pids}
+            with mock.patch.dict(os.environ, env):
+                with app.keep_awake("linux") as note:
+                    self.assertEqual(note, "")
+                    end = time.monotonic() + 5
+                    while not os.path.exists(pids) and time.monotonic() < end:
+                        time.sleep(0.05)
+                    with open(pids) as f:
+                        parent, child = [int(x) for x in f.read().split()]
+                    os.kill(child, 0)         # both alive while held
+            self.assertTrue(gone(parent), "systemd-inhibit stayed alive")
+            self.assertTrue(gone(child), "its child was orphaned")
+
+    def test_helper_is_started_in_its_own_group(self):
+        popen = mock.Mock()
+        with app.keep_awake("linux", popen=popen, which=lambda n: "/bin/" + n):
+            pass
+        self.assertTrue(popen.call_args[1].get("start_new_session"))
+
+    def test_watcher_exits_by_itself_when_treerot_is_gone(self):
+        dead = subprocess.Popen(["sleep", "0"])
+        dead.wait()
+        w = subprocess.Popen(app.awake_watcher_args(dead.pid, interval="0.2"))
+        try:
+            w.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            w.kill()
+            self.fail("the watcher outlived the process it watches")
+
+    def test_watcher_keeps_running_while_treerot_lives(self):
+        w = subprocess.Popen(app.awake_watcher_args(os.getpid(), interval="0.2"))
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                w.wait(timeout=1)
+        finally:
+            w.kill()
+            w.wait()
 
 
 @unittest.skipUnless(tk_ok(), "no display or tkinter")

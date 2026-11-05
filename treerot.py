@@ -46,6 +46,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -325,13 +326,29 @@ def count_tree(root, cancel_event=None, progress_cb=None, follow_symlinks=False,
 
 
 AWAKE_NOTE = "Could not stop this computer from going to sleep. A sleeping computer pauses the scan."
-_AWAKE_CHILDREN = set()          # helper processes holding the computer awake right now
+_AWAKE_CHILDREN = {}           # helper processes holding the computer awake right now
 _AWAKE_LOCK = threading.Lock()
 
 
-def _stop_helper(child):
+def awake_watcher_args(pid, interval=5):
+    """A POSIX shell loop that ends by itself once process `pid` is gone (busybox has no
+    `tail --pid`). It is what systemd-inhibit runs, so a TreeRot killed with SIGKILL or SIGTERM
+    does not leave the inhibitor open: the lock lasts at most `interval` seconds longer."""
+    return ["sh", "-c", 'while kill -0 "$0" 2>/dev/null; do sleep "$1"; done',
+            str(int(pid)), str(interval)]
+
+
+def _stop_helper(child, grouped=False):
+    """Ends a helper. A grouped one leads its own process group, which is ended whole, since
+    systemd-inhibit forks its command and ending only the parent would orphan it."""
     try:
-        child.terminate()
+        if grouped:
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+            except Exception:
+                child.terminate()
+        else:
+            child.terminate()
         child.wait(2)                # reap it, so no zombie is left behind
     except Exception:
         pass
@@ -341,10 +358,10 @@ def release_all_awake():
     """Ends every helper process still keeping the computer awake. The window calls this when
     it closes, and it runs at exit, so no caffeinate or systemd-inhibit outlives the program."""
     with _AWAKE_LOCK:
-        children = list(_AWAKE_CHILDREN)
+        children = list(_AWAKE_CHILDREN.items())
         _AWAKE_CHILDREN.clear()
-    for child in children:
-        _stop_helper(child)
+    for child, grouped in children:
+        _stop_helper(child, grouped)
 
 
 atexit.register(release_all_awake)
@@ -359,7 +376,7 @@ def keep_awake(platform=None, popen=None, which=None, windows_api=None):
     platform = platform or sys.platform
     popen = popen or subprocess.Popen
     which = which or shutil.which
-    child, note = None, ""
+    child, note, grouped = None, "", False
     try:
         if platform == "win32":
             if windows_api is None:
@@ -370,16 +387,18 @@ def keep_awake(platform=None, popen=None, which=None, windows_api=None):
             child = popen(["caffeinate", "-i", "-w", str(os.getpid())],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif platform != "darwin" and which("systemd-inhibit") and which("sleep"):
+            grouped = True
             child = popen(["systemd-inhibit", "--what=sleep", f"--who={APP_NAME}",
-                           "--why=Scanning a folder tree", "sleep", "infinity"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           "--why=Scanning a folder tree"] + awake_watcher_args(os.getpid()),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          start_new_session=True)
         else:
             note = AWAKE_NOTE
     except Exception:
         note = AWAKE_NOTE
     if child is not None:
         with _AWAKE_LOCK:
-            _AWAKE_CHILDREN.add(child)
+            _AWAKE_CHILDREN[child] = grouped
     try:
         yield note
     finally:
@@ -390,8 +409,8 @@ def keep_awake(platform=None, popen=None, which=None, windows_api=None):
             pass
         if child is not None:
             with _AWAKE_LOCK:
-                _AWAKE_CHILDREN.discard(child)
-            _stop_helper(child)
+                _AWAKE_CHILDREN.pop(child, None)
+            _stop_helper(child, grouped)
 
 
 def scan_tree(root, cancel_event=None, progress_cb=None, follow_symlinks=False,
