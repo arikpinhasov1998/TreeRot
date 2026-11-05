@@ -584,7 +584,7 @@ def parse_date(text, end_of_day=False):
     if not text:
         return None
     d = datetime.strptime(text, "%Y-%m-%d")
-    return d.replace(hour=23, minute=59, second=59) if end_of_day else d
+    return d.replace(hour=23, minute=59, second=59, microsecond=999999) if end_of_day else d
 
 
 def describe_period(d_from, d_to):
