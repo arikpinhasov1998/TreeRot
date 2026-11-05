@@ -967,6 +967,10 @@ TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 TASK_PREFIX = "TreeRot\\scan-"          # every task this program creates, and only those
 STARTING_GRACE_SECONDS = 300            # no status after this long: the task did not get going
 SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
+JOBS_REFRESH_MS = 5000                  # how often the open panel looks at the scans again
+JOB_LIVE = ("starting", "silent", "running", "stalled")     # may still have a process to end
+JOB_LABELS = {"starting": "Starting", "silent": "Not started", "running": "Running",
+              "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed"}
 _JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
 # What XML 1.0 can carry, without line breaks: the task's command line has no way to hold them.
 _NOT_TASK_TEXT = re.compile("[^\t\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
@@ -1440,6 +1444,10 @@ def run_gui(preload=None, on_ready=None):
             self.scan_elapsed = None
             self.meter = None
             self.settings = load_settings()
+            self._bg_token = 0        # the newest "Run in background" press; older checks are ignored
+            self._bg_starting = False # a task is being created (the password prompt may be open)
+            self._jobs_ui = None      # the Background scans panel, while it is open
+            self._jobs_gen = 0
 
             self._build_ui()
             self.path_var.set(self.settings.get("path", ""))
@@ -1449,6 +1457,8 @@ def run_gui(preload=None, on_ready=None):
             self.protocol("WM_DELETE_WINDOW", self._on_close)
             self._clear_summary()
             self._poll_job = self.after(100, self._poll)
+            if background_available():
+                self._clean_finished_jobs()
 
         # ---- UI construction
         def _build_ui(self):
@@ -1533,6 +1543,14 @@ def run_gui(preload=None, on_ready=None):
             self.report_btn = ttk.Button(button_row, text="Export report...",
                                          command=self._export_report, state="disabled")
             self.report_btn.pack(side="left", padx=(6, 0))
+            self.bg_btn = self.jobs_btn = None
+            if background_available():
+                self.bg_btn = ttk.Button(button_row, text="Run in background...",
+                                         command=self._run_background)
+                self.bg_btn.pack(side="left", padx=(6, 0))
+                self.jobs_btn = ttk.Button(button_row, text="Background scans",
+                                           command=self._jobs_panel)
+                self.jobs_btn.pack(side="left", padx=(6, 0))
             self.precount_var = tk.BooleanVar(value=bool(self.settings.get("precount", False)))
             ttk.Checkbutton(button_row, text="Count first (exact progress, slower)",
                             variable=self.precount_var).pack(side="left", padx=(14, 0))
@@ -2026,6 +2044,16 @@ def run_gui(preload=None, on_ready=None):
                 self.status_var.set("The PDF was canceled.")
             elif msg[0] == "report_done":
                 self._report_done(msg[1], msg[2])
+            elif msg[0] == "bg_checked":
+                self._bg_checked(*msg[1:])
+            elif msg[0] == "background":
+                self._bg_started(msg[1])
+            elif msg[0] == "jobs_list":
+                self._jobs_listed(*msg[1:])
+            elif msg[0] == "job_row":
+                self._job_row_done(*msg[1:])
+            elif msg[0] == "job_done":
+                self._job_done(*msg[1:])
             elif msg[0] == "error":
                 self.prog_bar.stop()
                 self.prog_var.set("Scan failed.")
@@ -2710,6 +2738,316 @@ def run_gui(preload=None, on_ready=None):
                     open_with_default_app(fn)
                 except Exception as e:
                     messagebox.showerror("Cannot open", str(e))
+
+        # ---- background scans (Windows). Everything slow runs on a worker that reports through
+        # self.q: a status file or report on a dead share must never stall this thread.
+        def _clean_finished_jobs(self):
+            def work():
+                try:
+                    clean_finished_jobs()
+                except Exception:
+                    traceback.print_exc()
+            threading.Thread(target=work, daemon=True).start()
+
+        def _run_background(self):
+            if self._bg_starting:
+                self.status_var.set("A background scan is still being set up. "
+                                    "Look for the console window asking for your password.")
+                return
+            root = self.path_var.get().strip().strip(QUOTE)
+            if not root:
+                messagebox.showerror("Invalid path", "Enter the folder or share to scan.")
+                return
+            text_from, text_to = self.from_var.get().strip(), self.to_var.get().strip()
+            try:
+                d_from = parse_date(text_from)
+                d_to = parse_date(text_to, end_of_day=True)
+            except ValueError:
+                messagebox.showerror("Invalid date", "Use the format YYYY-MM-DD, e.g. 2024-10-28.")
+                return
+            if d_from is None and d_to is None:
+                messagebox.showerror("Missing period", "Enter at least a From date.")
+                return
+            if d_from and d_to and d_from > d_to:
+                messagebox.showerror("Invalid period", "The From date is after the To date.")
+                return
+            args = background_args(text_from, text_to, list(self.ex_list.get(0, "end")),
+                                   created=self.created_var.get(),
+                                   follow_symlinks=self.symlink_var.get(),
+                                   precount=self.precount_var.get())
+            self._bg_token += 1      # a folder still being checked no longer counts
+            token = self._bg_token
+            self.status_var.set("Checking the folder...")
+            q = self.q
+
+            def work():
+                try:
+                    problem = check_background_folder(root)
+                except Exception as e:
+                    problem = str(e) or type(e).__name__
+                q.put(("bg_checked", token, root, args, problem))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _bg_checked(self, token, root, args, problem):
+            if token != self._bg_token or self._bg_starting:
+                return
+            if problem:
+                self.status_var.set("The background scan was not started.")
+                messagebox.showerror("Background scan", problem)
+                return
+            fn = filedialog.asksaveasfilename(
+                title="Where should the report be saved?", defaultextension=".html",
+                filetypes=[("HTML report", "*.html"), ("PDF report", "*.pdf")],
+                initialfile=f"treerot_report_{datetime.now():%Y%m%d_%H%M}.html")
+            if not fn:
+                self.status_var.set("The background scan was not started.")
+                return
+            self._bg_starting = True
+            self.status_var.set("A console window will ask for your Windows password...")
+            q = self.q
+
+            def work():
+                try:
+                    start_background_scan(root, args, fn)
+                    q.put(("background", None))
+                except Exception as e:
+                    q.put(("background", str(e) or type(e).__name__))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _bg_started(self, problem):
+            self._bg_starting = False
+            if problem:
+                self.status_var.set("The background scan was not started.")
+                messagebox.showerror("Background scan", problem)
+            else:
+                self.status_var.set("The background scan is running. You can close this "
+                                    "window and log off. See Background scans for progress.")
+
+        def _jobs_panel(self):
+            ui = self._jobs_ui
+            if ui is not None:
+                ui["win"].lift()
+                return
+            win = tk.Toplevel(self)
+            win.title("Background scans")
+            win.geometry("900x340")
+            frame = ttk.Frame(win)
+            frame.pack(fill="both", expand=True, padx=8, pady=8)
+            tv = ttk.Treeview(frame, columns=("state", "detail"), selectmode="browse", height=8)
+            tv.heading("#0", text="Folder")
+            tv.heading("state", text="State")
+            tv.heading("detail", text="Details")
+            tv.column("state", width=90, stretch=False)
+            bar = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+            tv.configure(yscrollcommand=bar.set)
+            bar.pack(side="right", fill="y")
+            tv.pack(side="left", fill="both", expand=True)
+            detail = ttk.Label(win, wraplength=870, justify="left")
+            detail.pack(fill="x", padx=8)
+            btns = ttk.Frame(win)
+            btns.pack(fill="x", padx=8, pady=8)
+            open_btn = ttk.Button(btns, text="Open report", command=self._jobs_open, state="disabled")
+            end_btn = ttk.Button(btns, text="End scan", command=self._jobs_end, state="disabled")
+            remove_btn = ttk.Button(btns, text="Remove", command=self._jobs_remove, state="disabled")
+            open_btn.pack(side="left")
+            end_btn.pack(side="left", padx=6)
+            remove_btn.pack(side="left")
+            note = ttk.Label(btns, wraplength=600, justify="left")
+            note.pack(side="left", padx=12)
+            self._jobs_gen += 1
+            self._jobs_ui = {
+                "win": win, "tv": tv, "detail": detail, "note": note,
+                "open": open_btn, "end": end_btn, "remove": remove_btn, "gen": self._jobs_gen,
+                "jobs": {}, "states": {}, "reports": {},
+                "reading": set(),      # jobs with a status read in progress (one each, at most)
+                "changing": set(),     # jobs being removed: a late read must not bring them back
+                "gone": set(), "listing": False, "after": None}
+            tv.bind("<<TreeviewSelect>>", lambda _e: self._jobs_sync())
+
+            def closed(e):
+                if e.widget is win:
+                    ui = self._jobs_ui
+                    self._jobs_ui = None
+                    if ui is not None and ui["after"] is not None:
+                        try:
+                            self.after_cancel(ui["after"])
+                        except tk.TclError:
+                            pass
+            win.bind("<Destroy>", closed)
+            self._jobs_refresh()
+
+        def _jobs_refresh(self):
+            ui = self._jobs_ui
+            if ui is None:
+                return
+            self._jobs_fetch()
+            ui["after"] = self.after(JOBS_REFRESH_MS, self._jobs_refresh)
+
+        def _jobs_fetch(self):
+            ui = self._jobs_ui
+            if ui is None or ui["listing"]:
+                return
+            ui["listing"] = True
+            gen, q = ui["gen"], self.q
+
+            def work():
+                try:
+                    jobs = load_jobs()
+                except Exception:
+                    traceback.print_exc()
+                    jobs = None
+                q.put(("jobs_list", gen, jobs))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _jobs_listed(self, gen, jobs):
+            ui = self._jobs_ui
+            if ui is None or ui["gen"] != gen:
+                return
+            ui["listing"] = False
+            if jobs is None:
+                return
+            tv = ui["tv"]
+            wanted = {j["id"]: j for j in jobs if j["id"] not in ui["gone"]}
+            for iid in tv.get_children():
+                if iid not in wanted:
+                    tv.delete(iid)
+            ui["jobs"] = wanted
+            for iid, job in wanted.items():
+                if not tv.exists(iid):
+                    tv.insert("", "end", iid=iid, text=job["root"], values=("Checking", ""))
+                if iid not in ui["reading"] and iid not in ui["changing"]:
+                    ui["reading"].add(iid)
+                    self._jobs_read(gen, job)
+            self._jobs_sync()
+
+        def _jobs_read(self, gen, job):
+            q = self.q
+
+            def work():
+                try:
+                    row = job_row(job)
+                except Exception as e:
+                    row = ("failed", f"Could not read this scan's status: {e}", None)
+                q.put(("job_row", gen, job["id"], row))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _job_row_done(self, gen, iid, row):
+            ui = self._jobs_ui
+            if ui is None or ui["gen"] != gen:
+                return
+            ui["reading"].discard(iid)
+            tv = ui["tv"]
+            if iid in ui["changing"] or iid in ui["gone"] or not tv.exists(iid):
+                return
+            state, detail, report = row
+            ui["states"][iid], ui["reports"][iid] = state, report
+            tv.item(iid, values=(JOB_LABELS.get(state, state), detail))
+            self._jobs_sync()
+
+        def _jobs_selected(self):
+            ui = self._jobs_ui
+            sel = ui["tv"].selection() if ui is not None else ()
+            return ui["jobs"].get(sel[0]) if sel else None
+
+        def _jobs_sync(self):
+            """The buttons and the full text follow the selected row."""
+            ui = self._jobs_ui
+            if ui is None:
+                return
+            job = self._jobs_selected()
+            iid = job["id"] if job else None
+            idle = job is not None and iid not in ui["changing"]
+            live = ui["states"].get(iid) in JOB_LIVE
+
+            def enable(name, on):
+                ui[name].config(state="normal" if on else "disabled")
+            enable("open", idle and bool(ui["reports"].get(iid)))
+            enable("end", idle and live)
+            enable("remove", idle)
+            ui["detail"].config(text=ui["tv"].set(iid, "detail") if job else "")
+
+        def _jobs_work(self, ui, fn, after=None):
+            """Runs fn on a worker. What it returns, or the error, goes in the panel's note."""
+            gen, q = ui["gen"], self.q
+
+            def work():
+                try:
+                    note, ok = fn() or "", True
+                except Exception as e:
+                    note, ok = str(e) or type(e).__name__, False
+                q.put(("job_done", gen, note, after, ok))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _job_done(self, gen, note, after, ok):
+            ui = self._jobs_ui
+            if ui is None or ui["gen"] != gen:
+                return
+            ui["note"].config(text=note)
+            if after is not None:
+                after(ok)
+            self._jobs_sync()
+            self._jobs_fetch()
+
+        def _jobs_open(self):
+            job = self._jobs_selected()
+            if job is None:
+                return
+
+            def work():
+                path = job_report(job)
+                if path is None:
+                    return "The report file was not found."
+                open_with_default_app(path)
+                return ""
+            self._jobs_ui["note"].config(text="Opening the report...")
+            self._jobs_work(self._jobs_ui, work)
+
+        def _jobs_end(self):
+            job = self._jobs_selected()
+            if job is None:
+                return
+            if not messagebox.askyesno("End scan", "End this scan? It stops now and "
+                                                   "writes no report.", parent=self._jobs_ui["win"]):
+                return
+
+            def work():
+                end_job(job)
+                return "The scan was ended."
+            self._jobs_ui["note"].config(text="Ending the scan...")
+            self._jobs_work(self._jobs_ui, work)
+
+        def _jobs_remove(self):
+            job = self._jobs_selected()
+            if job is None:
+                return
+            ui, iid = self._jobs_ui, job["id"]
+            # Not yet known to be over (its share may not be answering): treat it as running.
+            running = ui["states"].get(iid) not in ("finished", "failed", "ended")
+            if running and not messagebox.askyesno(
+                    "Remove", "This scan may still be running. End it and remove it?",
+                    parent=ui["win"]):
+                return
+            ui["changing"].add(iid)
+            ui["tv"].item(iid, values=("Removing", ""))
+            ui["note"].config(text="")
+            self._jobs_sync()
+
+            def work():
+                if running:
+                    try:
+                        end_job(job)
+                    except (BackgroundError, OSError):
+                        pass               # it had already stopped, most likely
+                remove_job(job)
+
+            def after(ok):
+                ui["changing"].discard(iid)
+                if ok:
+                    ui["gone"].add(iid)
+                    ui["jobs"].pop(iid, None)
+                    if ui["tv"].exists(iid):
+                        ui["tv"].delete(iid)
+            self._jobs_work(ui, work, after)
 
         def _about(self):
             if messagebox.askyesno(f"About {APP_NAME}",
