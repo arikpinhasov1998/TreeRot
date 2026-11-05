@@ -38,6 +38,7 @@ Requires only the Python 3.8+ standard library (tkinter ships with Python).
 
 import argparse
 import atexit
+import contextlib
 import csv
 import errno
 import fnmatch
@@ -321,6 +322,76 @@ def count_tree(root, cancel_event=None, progress_cb=None, follow_symlinks=False,
     if progress_cb:
         progress_cb({"phase": "count", "folders": n_folders, "files": n_files, "current": ""})
     return n_folders, n_files
+
+
+AWAKE_NOTE = "Could not stop this computer from going to sleep. A sleeping computer pauses the scan."
+_AWAKE_CHILDREN = set()          # helper processes holding the computer awake right now
+_AWAKE_LOCK = threading.Lock()
+
+
+def _stop_helper(child):
+    try:
+        child.terminate()
+        child.wait(2)                # reap it, so no zombie is left behind
+    except Exception:
+        pass
+
+
+def release_all_awake():
+    """Ends every helper process still keeping the computer awake. The window calls this when
+    it closes, and it runs at exit, so no caffeinate or systemd-inhibit outlives the program."""
+    with _AWAKE_LOCK:
+        children = list(_AWAKE_CHILDREN)
+        _AWAKE_CHILDREN.clear()
+    for child in children:
+        _stop_helper(child)
+
+
+atexit.register(release_all_awake)
+
+
+@contextlib.contextmanager
+def keep_awake(platform=None, popen=None, which=None, windows_api=None):
+    """
+    Stops the computer sleeping while the block runs. Yields a note, empty when it worked.
+    On Windows the setting belongs to the calling thread, so use this on the scanning thread.
+    """
+    platform = platform or sys.platform
+    popen = popen or subprocess.Popen
+    which = which or shutil.which
+    child, note = None, ""
+    try:
+        if platform == "win32":
+            if windows_api is None:
+                import ctypes
+                windows_api = ctypes.windll.kernel32.SetThreadExecutionState
+            windows_api(0x80000001)                       # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        elif platform == "darwin" and which("caffeinate"):
+            child = popen(["caffeinate", "-i", "-w", str(os.getpid())],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif platform != "darwin" and which("systemd-inhibit") and which("sleep"):
+            child = popen(["systemd-inhibit", "--what=sleep", f"--who={APP_NAME}",
+                           "--why=Scanning a folder tree", "sleep", "infinity"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            note = AWAKE_NOTE
+    except Exception:
+        note = AWAKE_NOTE
+    if child is not None:
+        with _AWAKE_LOCK:
+            _AWAKE_CHILDREN.add(child)
+    try:
+        yield note
+    finally:
+        try:
+            if platform == "win32" and windows_api is not None and not note:
+                windows_api(0x80000000)                   # ES_CONTINUOUS: back to normal
+        except Exception:
+            pass
+        if child is not None:
+            with _AWAKE_LOCK:
+                _AWAKE_CHILDREN.discard(child)
+            _stop_helper(child)
 
 
 def scan_tree(root, cancel_event=None, progress_cb=None, follow_symlinks=False,
@@ -889,6 +960,7 @@ def run_gui(preload=None, on_ready=None):
             self.matching = []
             self.q = queue.Queue()
             self.cancel_event = threading.Event()
+            self.awake_note = ""
             self.report_cancel = threading.Event()   # a PDF export has its own flag
             self._report_thread = None
             self.period_text = ""
@@ -1262,11 +1334,21 @@ def run_gui(preload=None, on_ready=None):
             except tk.TclError:
                 pass
             self._end_report()           # the browser must not outlive the window
+            self._end_scan()
             try:                         # no stray callback may fire into a dead interpreter
                 self.after_cancel(self._poll_job)
             except (tk.TclError, AttributeError):
                 pass
             super().destroy()
+
+        def _end_scan(self):
+            """A scan still running when the window closes is canceled, and the computer is let
+            go of at once: no caffeinate or systemd-inhibit may outlive the window."""
+            self.cancel_event.set()
+            t = getattr(self, "_scan_thread", None)
+            if t is not None and t.is_alive():
+                t.join(2)
+            release_all_awake()
 
         def _on_close(self):
             try:
@@ -1329,6 +1411,7 @@ def run_gui(preload=None, on_ready=None):
             self.export_btn.config(state="disabled")
             self.report_btn.config(state="disabled")
             self.status_var.set("Scanning...")
+            self.awake_note = ""
             self.t0 = time.monotonic()
             follow = self.symlink_var.get()
             excludes = list(self.ex_list.get(0, "end"))
@@ -1348,34 +1431,41 @@ def run_gui(preload=None, on_ready=None):
                 "computer": socket.gethostname(),
             }
 
+            def scan_body():
+                stats = {}
+
+                def report(p):
+                    self.q.put(("progress", p))
+
+                totals, exact = None, True
+                if precount:
+                    totals = count_tree(root, self.cancel_event, report,
+                                        follow_symlinks=follow, excludes=excludes)
+                    if totals is None:                       # canceled while counting
+                        self.q.put(("done", [], self.period_text, True, 0))
+                        return
+                else:
+                    totals, exact = last_totals(self.settings, self._totals_key), False
+                folders, canceled = scan_tree(
+                    root, self.cancel_event, report,
+                    follow_symlinks=follow, excludes=excludes, stats=stats,
+                    date_from_ts=lo, date_to_ts=hi, totals=totals, totals_exact=exact,
+                    created=created_mode)
+                rows = build_rows(folders, d_from, d_to, activity)
+                self.q.put(("done", rows, self.period_text, canceled,
+                            stats.get("excluded", 0)))
+
             def work():
                 try:
-                    stats = {}
-
-                    def report(p):
-                        self.q.put(("progress", p))
-
-                    totals, exact = None, True
-                    if precount:
-                        totals = count_tree(root, self.cancel_event, report,
-                                            follow_symlinks=follow, excludes=excludes)
-                        if totals is None:                       # canceled while counting
-                            self.q.put(("done", [], self.period_text, True, 0))
-                            return
-                    else:
-                        totals, exact = last_totals(self.settings, self._totals_key), False
-                    folders, canceled = scan_tree(
-                        root, self.cancel_event, report,
-                        follow_symlinks=follow, excludes=excludes, stats=stats,
-                        date_from_ts=lo, date_to_ts=hi, totals=totals, totals_exact=exact,
-                        created=created_mode)
-                    rows = build_rows(folders, d_from, d_to, activity)
-                    self.q.put(("done", rows, self.period_text, canceled,
-                                stats.get("excluded", 0)))
+                    with keep_awake() as note:      # on this thread: Windows ties it to the thread
+                        if note:
+                            self.q.put(("note", note))
+                        scan_body()
                 except Exception as e:
                     self.q.put(("error", str(e)))
 
-            threading.Thread(target=work, daemon=True).start()
+            self._scan_thread = threading.Thread(target=work, daemon=True)
+            self._scan_thread.start()
 
         def _cancel(self):
             self.cancel_event.set()
@@ -1419,7 +1509,8 @@ def run_gui(preload=None, on_ready=None):
                 cur = p.get("current") or ""
                 cur = (cur[:100] + "...") if len(cur) > 103 else cur
                 self.status_var.set(
-                    ("Counting: " if p["phase"] == "count" else "Scanning: ") + cur)
+                    ("Counting: " if p["phase"] == "count" else "Scanning: ") + cur
+                    + (f"  |  {self.awake_note}" if self.awake_note else ""))
             elif msg[0] == "done":
                 _, rows, cutoff, canceled, n_excl = msg
                 try:
@@ -1465,6 +1556,9 @@ def run_gui(preload=None, on_ready=None):
 
             elif msg[0] == "files":
                 self._files_loaded(*msg[1:])
+            elif msg[0] == "note":
+                self.awake_note = msg[1]
+                self.status_var.set(msg[1])
             elif msg[0] == "report_canceled":
                 self.cancel_btn.config(state="disabled")
                 self.report_btn.config(state="normal" if self.rows else "disabled")
@@ -3635,19 +3729,22 @@ def run_cli(a, root):
     scan_started = datetime.now()
     settings = load_settings()
     tkey = totals_key(root, excludes, a.follow_symlinks)
-    totals, exact = None, True
-    if a.precount:
-        totals = count_tree(root, progress_cb=reporter, follow_symlinks=a.follow_symlinks,
-                            excludes=excludes)
-    else:
-        totals, exact = last_totals(settings, tkey), False
-    stats = {}
-    folders, _ = scan_tree(
-        root, progress_cb=reporter, excludes=excludes, stats=stats,
-        follow_symlinks=a.follow_symlinks,
-        date_from_ts=d_from.timestamp() if d_from else None,
-        date_to_ts=d_to.timestamp() if d_to else None, totals=totals, totals_exact=exact,
-        created=a.created)
+    with keep_awake() as awake_note:
+        if awake_note and not a.quiet:
+            sys.stderr.write(awake_note + "\n")
+        totals, exact = None, True
+        if a.precount:
+            totals = count_tree(root, progress_cb=reporter, follow_symlinks=a.follow_symlinks,
+                                excludes=excludes)
+        else:
+            totals, exact = last_totals(settings, tkey), False
+        stats = {}
+        folders, _ = scan_tree(
+            root, progress_cb=reporter, excludes=excludes, stats=stats,
+            follow_symlinks=a.follow_symlinks,
+            date_from_ts=d_from.timestamp() if d_from else None,
+            date_to_ts=d_to.timestamp() if d_to else None, totals=totals, totals_exact=exact,
+            created=a.created)
     if reporter:
         reporter.finish()
     uses_created = a.created == "ctime" or (a.created == "auto" and CREATED_NATIVE)
