@@ -7,9 +7,8 @@ import tempfile
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_name = "treerot" if os.path.exists(os.path.join(ROOT, "treerot.py")) else "folder_activity_scanner"
 sys.path.insert(0, ROOT)
-app = importlib.import_module(_name)
+app = importlib.import_module("treerot")
 
 # Tests save settings: never touch the real ~/.treerot.json.
 _SETTINGS_DIR = tempfile.mkdtemp(prefix="treerot-test-settings-")
