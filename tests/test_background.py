@@ -107,6 +107,23 @@ class Xml(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(app.BackgroundError):
                 app.build_task_xml("x.exe", ["--exclude", value], "me")
 
+    def test_text_task_scheduler_would_expand_is_refused_not_changed(self):
+        for value, named in (("%TEMP%", "%TEMP%"), ("a%USERNAME%b", "%USERNAME%"), ("$(Arg0)", "$(Arg0)"),
+                             ("x$(Arg12)y", "$(Arg12)"), ("$(anything)", "$(anything)")):
+            with self.subTest(value=value), self.assertRaises(app.BackgroundError) as c:
+                app.build_task_xml("x.exe", ["--exclude=" + value], "me")
+            self.assertIn(named, str(c.exception))
+        with self.assertRaises(app.BackgroundError):
+            app.build_task_xml("C:\\%TEMP%\\x.exe", [], "me")
+        with self.assertRaises(app.BackgroundError):      # they meet once the line is joined
+            app.build_task_xml("x.exe", ["50%", "60%"], "me")
+
+    def test_percent_and_dollar_that_cannot_expand_pass(self):
+        for value in ("100%", "$5", "cost$", "(x)", "$ (y)"):
+            with self.subTest(value=value):
+                root = ET.fromstring(app.build_task_xml("x.exe", [value], "me"))
+                self.assertEqual(windows_argv(root.find("t:Actions/t:Exec/t:Arguments", NS).text), [value])
+
     def test_no_trigger_so_no_start_time_can_pass_while_the_password_is_typed(self):
         root = ET.fromstring(app.build_task_xml("x.exe", [], "me"))
         self.assertIsNone(root.find("t:Triggers", NS))
@@ -676,6 +693,12 @@ class OnlyOurTasks(JobCase):
                 path = os.path.join(self.d, report)
                 app._save_job(dict(job, report=path, status_file=path + ".status.json"))
                 self.assertEqual(len(app.load_jobs()), 1)
+
+    def test_expandable_text_stops_before_any_prompt(self):
+        with self.assertRaises(app.BackgroundError):
+            self.start(args=["--exclude=%TEMP%"])
+        self.assertEqual(self.cmds, [])
+        self.assertEqual(app.load_jobs(), [])
 
     def test_a_report_of_another_type_is_refused_before_any_task_exists(self):
         # load_jobs would skip its record, leaving a task nobody can see.

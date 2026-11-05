@@ -978,6 +978,10 @@ _JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
 _NOT_TASK_TEXT = re.compile("[^\t\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
 
 
+# Task Scheduler may expand these in a command line, which would silently change the value.
+_TASK_EXPANDS = re.compile(r"%[^%]+%|\$\([^)]*\)")
+
+
 class BackgroundError(Exception):
     pass
 
@@ -1070,6 +1074,14 @@ def build_task_xml(exe, arguments, user, logon_type="Password"):
     for value in [exe, user] + list(arguments):
         if _NOT_TASK_TEXT.search(value):
             raise BackgroundError(f"A background task cannot carry this text: {ascii(value)}")
+    line = subprocess.list2cmdline(arguments)
+    for text in (exe, line):
+        found = _TASK_EXPANDS.search(text)
+        if found:
+            raise BackgroundError(
+                f"A background task cannot carry {found.group()} in a path or exclusion: Windows "
+                "could replace it with something else before the scan sees it. Rename it or "
+                "leave it out, or run the scan in this window.")
 
     def add(parent, tag, text=None, **attrs):
         node = ET.SubElement(parent, tag, attrs)
@@ -1093,7 +1105,7 @@ def build_task_xml(exe, arguments, user, logon_type="Password"):
         add(settings, tag, text)
     run = add(add(task, "Actions", Context="Author"), "Exec")
     add(run, "Command", exe)
-    add(run, "Arguments", subprocess.list2cmdline(arguments))
+    add(run, "Arguments", line)
     return '<?xml version="1.0" encoding="UTF-16"?>\n' + ET.tostring(task, encoding="unicode")
 
 
