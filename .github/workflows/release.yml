@@ -79,6 +79,20 @@ jobs:
           Stop-Process -Id $g.Id -Force
           Write-Host "Windows tests OK"
 
+      - name: Test a real background task (informational)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -c "import treerot,os; open('t.xml','w',encoding='utf-16').write(treerot.build_task_xml(os.path.abspath('dist/release/TreeRot-cli.exe'), [os.getcwd(), '--format', 'summary', '-q', '--progress', 'none', '--report', os.path.abspath('bg.html'), '--status-file', os.path.abspath('bg.json')], os.environ['USERDOMAIN'] + '\\' + os.environ['USERNAME'], logon_type='S4U'))"
+          schtasks /Create /TN TreeRot\ci /XML t.xml /F
+          schtasks /Run /TN TreeRot\ci
+          for ($i = 0; $i -lt 30 -and -not (Test-Path bg.html); $i++) { Start-Sleep -Seconds 2 }
+          schtasks /Delete /TN TreeRot\ci /F
+          if (-not (Test-Path bg.html)) { throw "The background task produced no report" }
+          Get-Content bg.json
+
       - name: Test (Linux)
         if: runner.os == 'Linux'
         run: |
