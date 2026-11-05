@@ -14,16 +14,23 @@ from tests.helpers import OLD, app, make_tree
 from tests.test_gui import tk_ok
 
 
+def running_popen():
+    """A Popen stand-in whose child is still running when first checked."""
+    popen = mock.Mock()
+    popen.return_value.wait.side_effect = [subprocess.TimeoutExpired("x", 0.2), 0, 0]
+    return popen
+
+
 class Awake(unittest.TestCase):
     def test_macos_runs_caffeinate_and_stops_it(self):
-        popen = mock.Mock()
+        popen = running_popen()
         with app.keep_awake("darwin", popen=popen, which=lambda n: "/usr/bin/caffeinate") as note:
             self.assertEqual(note, "")
             self.assertEqual(popen.call_args[0][0][0], "caffeinate")
         popen.return_value.terminate.assert_called_once()
 
     def test_linux_uses_systemd_inhibit(self):
-        popen = mock.Mock()
+        popen = running_popen()
         with app.keep_awake("linux", popen=popen, which=lambda n: "/bin/" + n) as note:
             self.assertEqual(note, "")
             self.assertEqual(popen.call_args[0][0][0], "systemd-inhibit")
@@ -45,14 +52,34 @@ class Awake(unittest.TestCase):
             self.assertIn("sleep", note)
 
     def test_child_is_stopped_even_when_the_block_raises(self):
-        popen = mock.Mock()
+        popen = running_popen()
         with self.assertRaises(ValueError):
             with app.keep_awake("darwin", popen=popen, which=lambda n: "/x"):
                 raise ValueError("scan failed")
         popen.return_value.terminate.assert_called_once()
 
-    def test_release_all_stops_a_child_still_held(self):
+    def test_a_helper_that_exits_at_once_gives_the_note(self):
         popen = mock.Mock()
+        popen.return_value.wait.return_value = 1          # already gone
+        with app.keep_awake("linux", popen=popen, which=lambda n: "/bin/" + n) as note:
+            self.assertIn("sleep", note)
+        self.assertEqual(app._AWAKE_CHILDREN, {})
+
+    def test_a_real_helper_that_fails_at_once_gives_the_note(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("caffeinate", "systemd-inhibit"):
+                path = os.path.join(d, name)
+                with open(path, "w") as f:
+                    f.write("#!/bin/sh\nexit 1\n")
+                os.chmod(path, 0o755)
+                subprocess.run([path])            # the first run of a new file is slow on macOS
+            with mock.patch.dict(os.environ, {"PATH": d + os.pathsep + os.environ["PATH"]}):
+                for plat in ("darwin", "linux"):
+                    with app.keep_awake(plat) as note:
+                        self.assertIn("sleep", note, plat)
+
+    def test_release_all_stops_a_child_still_held(self):
+        popen = running_popen()
         cm = app.keep_awake("darwin", popen=popen, which=lambda n: "/x")
         cm.__enter__()
         app.release_all_awake()
@@ -130,7 +157,7 @@ class LinuxHelper(unittest.TestCase):
             self.assertTrue(gone(child), "its child was orphaned")
 
     def test_helper_is_started_in_its_own_group(self):
-        popen = mock.Mock()
+        popen = running_popen()
         with app.keep_awake("linux", popen=popen, which=lambda n: "/bin/" + n):
             pass
         self.assertTrue(popen.call_args[1].get("start_new_session"))

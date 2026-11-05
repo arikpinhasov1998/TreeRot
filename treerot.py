@@ -404,6 +404,12 @@ def keep_awake(platform=None, popen=None, which=None, windows_api=None):
                           start_new_session=True)
         else:
             note = AWAKE_NOTE
+        if child is not None:
+            try:                     # a helper that quits at once (no D-Bus, no polkit) is no help
+                child.wait(0.2)
+                child, note = None, AWAKE_NOTE
+            except subprocess.TimeoutExpired:
+                pass                 # still running: it holds the computer awake
     except Exception:
         note = AWAKE_NOTE
     if child is not None:
