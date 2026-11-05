@@ -512,29 +512,76 @@ class Jobs(JobCase):
 
     # ---- an old status file must not pass for this run's result
 
-    def test_old_status_is_removed_before_the_task_is_created(self):
-        status = os.path.join(self.d, "r.html.status.json")
+    def old_status(self, report="r.html"):
+        status = os.path.join(self.d, report + ".status.json")
         with open(status, "w", encoding="utf-8") as f:
             json.dump({"state": "finished", "updated": 1, "report": "old", "error": ""}, f)
-        present = []
+        return status
+
+    def test_old_status_is_gone_before_the_task_can_start(self):
+        status = self.old_status()
+        present = {}
 
         def runner(cmd, **kw):
-            present.append(os.path.exists(status))
+            present["create" if "/Create" in cmd else "run"] = os.path.exists(status)
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(present, [False, False])
+        self.assertFalse(present["run"])             # /Run is the only thing that starts it
         self.assertEqual(app.job_state(job)[0], "starting")
 
     def test_an_old_status_that_cannot_be_removed_stops_everything(self):
-        status = os.path.join(self.d, "r.html.status.json")
-        open(status, "w").close()
-        with mock.patch.object(app.os, "remove", side_effect=PermissionError("in use")), \
+        status = self.old_status()
+        real = os.remove
+
+        def remove(path):
+            if path == status:
+                raise PermissionError("in use")
+            real(path)
+        with mock.patch.object(app.os, "remove", remove), \
                 self.assertRaises(app.BackgroundError) as c:
             self.start()
         self.assertIn(status, str(c.exception))
         self.assertIn("in use", str(c.exception))
-        self.assertEqual(self.cmds, [])
+        self.assertFalse([c for c in self.cmds if "/Run" in c])
+        self.assertIn("/Delete", self.cmds[-1])      # the new task does not stay behind
         self.assertEqual(app.load_jobs(), [])
+
+    def test_canceling_the_prompt_loses_nothing_from_the_earlier_scan(self):
+        first = self.start()
+        self.write_status(first, state="finished", report=first["report"])
+        with open(first["report"], "w") as f:
+            f.write("x")
+        cmds = []
+
+        def cancel(cmd, **kw):
+            cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, b"", b"")
+        with self.assertRaises(app.BackgroundError):
+            app.start_background_scan("\\\\srv\\s", [], first["report"], runner=cancel)
+        self.assertEqual(len(cmds), 1)
+        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
+        self.assertEqual(app.job_report(first), first["report"])
+
+    def test_during_the_prompt_the_old_result_does_not_pass_for_the_new_scan(self):
+        first = self.start()
+        self.write_status(first, state="finished", report=first["report"])
+        seen = {}
+
+        def runner(cmd, **kw):
+            if "/Create" in cmd:
+                seen["rows"] = {j["id"]: app.job_state(j)[0] for j in app.load_jobs()}
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        second = app.start_background_scan("\\\\srv\\s", [], first["report"], runner=runner)
+        self.assertEqual(seen["rows"][first["id"]], "finished")
+        self.assertEqual(seen["rows"][second["id"]], "creating")
+        self.assertEqual(app.job_state(app.load_jobs()[0])[0], "starting")   # the prompt is over
+
+    def test_a_prompt_left_behind_ends_up_removable_and_not_finished(self):
+        first = self.start()
+        self.write_status(first, state="finished", report=first["report"])
+        record = dict(first, creating=True, started=time.time() - app.CREATING_LIMIT_SECONDS - 1)
+        app._save_job(record)
+        self.assertEqual(app.job_state(record)[0], "silent")
 
     def test_a_live_scan_with_the_same_report_is_not_disturbed(self):
         first = self.start()
@@ -560,7 +607,9 @@ class Jobs(JobCase):
         self.write_status(first, state="finished", report=first["report"])
         second = self.start()
         self.assertEqual([j["id"] for j in app.load_jobs()], [second["id"]])
-        self.assertEqual(self.cmds[0][:4], [app.schtasks_exe(), "/Delete", "/TN", first["task"]])
+        self.assertIn("/Create", self.cmds[0])       # only once the new task exists
+        self.assertEqual(self.cmds[1][:4], [app.schtasks_exe(), "/Delete", "/TN", first["task"]])
+        self.assertIn("/Run", self.cmds[2])
 
     # ---- when the steps fail
 

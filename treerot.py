@@ -971,7 +971,8 @@ STARTING_GRACE_SECONDS = 300            # no status after this long: the task di
 SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
 JOBS_REFRESH_MS = 5000                  # how often the open panel looks at the scans again
 JOB_LIVE = ("starting", "silent", "running", "stalled")     # may still have a process to end
-JOB_LABELS = {"starting": "Starting", "silent": "Not started", "running": "Running",
+CREATING_LIMIT_SECONDS = 900            # a password prompt older than this was left or abandoned
+JOB_LABELS = {"creating": "Password", "starting": "Starting", "silent": "Not started", "running": "Running",
               "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed"}
 _JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
 # What XML 1.0 can carry, without line breaks: the task's command line has no way to hold them.
@@ -1214,6 +1215,12 @@ def _forget_job(job_id):
         pass
 
 
+def _still_creating(job):
+    started = job.get("started")
+    return (bool(job.get("creating")) and isinstance(started, (int, float))
+            and time.time() - started < CREATING_LIMIT_SECONDS)
+
+
 def _names_our_task(job):
     """A task name is ours only if it is exactly the name this program gives that job id."""
     job_id = job.get("id")
@@ -1249,15 +1256,22 @@ def _delete_task(task, run):
         raise BackgroundError(f"Windows would not delete the background task. {_windows_text(res)}".strip())
 
 
-def _clear_the_way(status_file, runner):
-    """A status file left at this path could pass for this run's result: a scan stopped by bad
-    arguments never writes one. So the old file goes before the task exists, or nothing starts."""
+def _refuse_if_in_use(status_file):
+    """Another scan that may still be alive could write the same report."""
     for other in load_jobs():
-        if _same_path(other["status_file"], status_file):
-            if job_state(other)[0] in JOB_LIVE:
-                raise BackgroundError(
-                    "Another background scan is writing this report. End it or choose another "
-                    "file. Background scans shows it.")
+        if _same_path(other["status_file"], status_file) and job_state(other)[0] in JOB_LIVE + ("creating",):
+            raise BackgroundError(
+                "Another background scan is writing this report. End it or choose another "
+                "file. Background scans shows it.")
+
+
+def _clear_the_way(status_file, job_id, runner):
+    """Called once the new task exists and before anything starts it: it has no trigger, so
+    only /Run can. A status file left at this path could pass for this run's result (a scan
+    stopped by bad arguments never writes one), so it goes first or nothing starts. Waiting
+    until now means canceling the password prompt loses nothing from the earlier scan."""
+    for other in load_jobs():
+        if other["id"] != job_id and _same_path(other["status_file"], status_file):
             remove_job(other, runner=runner)    # its report is about to be replaced
     try:
         os.remove(status_file)
@@ -1266,6 +1280,22 @@ def _clear_the_way(status_file, runner):
     except OSError as e:
         raise BackgroundError(f"The old status file {status_file} could not be removed, so its "
                               f"result could be mistaken for this scan's. {e}")
+
+
+def _take_back(job, run, why):
+    """The task exists but must not stay. Returns the error to show."""
+    try:
+        _delete_task(job["task"], run)
+        _forget_job(job["id"])
+        return why
+    except (BackgroundError, OSError) as e:
+        job.pop("creating", None)
+        try:
+            _save_job(job)               # no longer waiting for the prompt: Remove must work
+        except OSError:
+            pass
+        return BackgroundError(f"{why} The task could not be removed either ({e}). "
+                               "Remove it under Background scans.")
 
 
 def start_background_scan(root, args, report, runner=None):
@@ -1290,7 +1320,7 @@ def start_background_scan(root, args, report, runner=None):
     user = windows_user()
     exe, arguments = background_command(root, list(args) + ["--report", report], status_file)
     xml_text = build_task_xml(exe, arguments, user)
-    _clear_the_way(status_file, runner)
+    _refuse_if_in_use(status_file)
 
     job_id = f"{datetime.now():%Y%m%d-%H%M%S}-{os.urandom(2).hex()}"
     task = TASK_PREFIX + job_id
@@ -1300,13 +1330,12 @@ def start_background_scan(root, args, report, runner=None):
         raise BackgroundError(f"Background scans cannot keep their files on a network path "
                               f"({JOBS_DIR}): the password window would not find them.")
     job = {"id": job_id, "task": task, "root": root, "report": report, "status_file": status_file,
-           "started": time.time()}
+           "started": time.time(), "creating": True}
     os.makedirs(JOBS_DIR, exist_ok=True)
     _save_job(job)                       # first, so no task ever exists without a record
     create = runner or _console_run
     run = runner or _quiet_run
     xml_path = os.path.join(JOBS_DIR, xml_name)
-    created = False
     try:
         write_task_xml(xml_path, xml_text)
         res = create(command, cwd=JOBS_DIR)
@@ -1314,27 +1343,24 @@ def start_background_scan(root, args, report, runner=None):
             raise BackgroundError(
                 "The background task could not be created. The reason is in the console window "
                 "that asked for your password. The README shows how to set this up by hand.")
-        created = True
-        res = run([schtasks_exe(), "/Run", "/TN", task])
-        if res.returncode != 0:
-            try:
-                _delete_task(task, run)
-            except (BackgroundError, OSError) as e:
-                raise BackgroundError("The background task was created but could not be started, "
-                                      f"and could not be removed either ({e}). Remove it under "
-                                      "Background scans.")
-            created = False
-            raise BackgroundError("The background task was created but could not be started. "
-                                  + _windows_text(res))
     except Exception:
-        if not created:
-            _forget_job(job_id)
+        _forget_job(job_id)
         raise
     finally:
         try:
             os.remove(xml_path)
         except OSError:
             pass
+    try:
+        _clear_the_way(status_file, job_id, runner)
+        del job["creating"]
+        _save_job(job)
+        res = run([schtasks_exe(), "/Run", "/TN", task])
+        if res.returncode != 0:
+            raise BackgroundError("The background task was created but could not be started. "
+                                  + _windows_text(res))
+    except (BackgroundError, OSError) as e:
+        raise _take_back(job, run, e)
     return job
 
 
@@ -1375,8 +1401,13 @@ def _report_in(status, job):
 
 def job_row(job):
     """(state, text for the panel, report path or None), from one read of the status file.
-    state: starting | silent | running | stalled | ended | finished | failed.
+    state: creating | starting | silent | running | stalled | ended | finished | failed.
     Reads the status file, maybe on a dead share: never call it on the Tk thread."""
+    if job.get("creating"):              # any status file there is still an earlier scan's
+        if _still_creating(job):
+            return "creating", "Waiting for your password in the console window.", None
+        return ("silent", "The password window was not answered, or TreeRot was closed "
+                          "while it was open.", None)
     s = read_status(job["status_file"])
     if s is not None and s["state"] == "finished":
         report = _report_in(s, job)
