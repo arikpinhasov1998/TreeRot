@@ -11,3 +11,8 @@ class SettingsIsolation(unittest.TestCase):
                 for n in (".treerot.json", ".folder_activity_scanner.json")}
         for p in (app.SETTINGS_FILE, app.OLD_SETTINGS_FILE):
             self.assertNotIn(os.path.normcase(os.path.realpath(p)), real, p)
+
+    def test_background_jobs_are_not_the_real_ones(self):
+        real = os.path.join(os.path.expanduser("~"), ".treerot")
+        self.assertFalse(os.path.normcase(os.path.realpath(app.JOBS_DIR)).startswith(
+            os.path.normcase(os.path.realpath(real)) + os.sep), app.JOBS_DIR)

@@ -16,6 +16,8 @@ _SETTINGS_DIR = tempfile.mkdtemp(prefix="treerot-test-settings-")
 atexit.register(shutil.rmtree, _SETTINGS_DIR, True)
 app.SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".treerot.json")
 app.OLD_SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".folder_activity_scanner.json")
+# Nor the real list of background scans: a window opened by a test reads it.
+app.JOBS_DIR = os.path.join(_SETTINGS_DIR, "jobs")
 
 OLD = datetime(2019, 1, 1).timestamp()
 NEW = datetime(2026, 1, 1).timestamp()

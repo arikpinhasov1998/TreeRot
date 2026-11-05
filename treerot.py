@@ -43,8 +43,10 @@ import csv
 import errno
 import fnmatch
 import json
+import ntpath
 import os
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -957,6 +959,430 @@ LISTING_TIMEOUT = 30                  # seconds before a silent folder listing i
 MAX_ABANDONED = 16                    # abandoned listing threads allowed to pile up
 FILE_THREADS = 4                      # file listings read at the same time
 FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
+
+
+# ---- background scans (Windows): a one-time scheduled task that outlives the RDP session
+JOBS_DIR = os.path.join(os.path.expanduser("~"), ".treerot", "jobs")
+TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+TASK_PREFIX = "TreeRot\\scan-"          # every task this program creates, and only those
+STARTING_GRACE_SECONDS = 300            # no status after this long: the task did not get going
+SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
+_JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
+# What XML 1.0 can carry, without line breaks: the task's command line has no way to hold them.
+_NOT_TASK_TEXT = re.compile("[^\t\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+
+
+class BackgroundError(Exception):
+    pass
+
+
+def background_available():
+    return sys.platform == "win32"
+
+
+def is_mapped_drive(path, drive_type=None):
+    """True for a drive letter that points at a network share. Those don't exist in a background task."""
+    if path[:4] in ("\\\\?\\", "\\\\.\\"):
+        path = path[4:]
+    if len(path) < 2 or path[1] != ":" or not path[0].isalpha():
+        return False
+    if drive_type is None:
+        if sys.platform != "win32":
+            return False
+        import ctypes
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW
+    return drive_type(path[0].upper() + ":\\") == 4          # DRIVE_REMOTE
+
+
+def check_background_folder(root):
+    """Why this folder can't be scanned in the background, or None. May be slow: not on the Tk thread."""
+    if is_mapped_drive(root):
+        return ("Mapped drive letters do not exist in a background task. Enter the full network "
+                "path instead, for example \\\\server\\share.")
+    if not os.path.isdir(root):
+        return "That folder does not exist or is not reachable."
+    return None
+
+
+def _full_path(path):
+    """A task does not start in this program's folder, so every path in it must be a full one."""
+    return path if path.startswith("\\\\") else os.path.abspath(path)
+
+
+def _same_path(a, b):
+    return os.path.normcase(_full_path(a)) == os.path.normcase(_full_path(b))
+
+
+def background_args(date_from, date_to, excludes, created=True, follow_symlinks=False, precount=False):
+    """The scan settings as command-line arguments. --exclude=VALUE is one argument, so an
+    exclusion that starts with a dash is still an exclusion, not an unknown option."""
+    args = ["--format", "summary", "-q"]
+    if date_from:
+        args += ["--from", date_from]
+    if date_to:
+        args += ["--to", date_to]
+    args += ["--exclude=" + ex for ex in excludes]
+    if not created:
+        args += ["--created", "off"]
+    if follow_symlinks:
+        args.append("--follow-symlinks")
+    if precount:
+        args.append("--precount")
+    return args
+
+
+def background_command(root, args, status_file):
+    """The program and arguments to run the shell version: the sibling CLI exe, or this script."""
+    if getattr(sys, "frozen", False):
+        exe = os.path.join(os.path.dirname(sys.executable), "TreeRot-cli.exe")
+        if not os.path.isfile(exe):
+            raise BackgroundError(f"TreeRot-cli.exe must be in the same folder as TreeRot.exe ({exe}).")
+        prefix = []
+    else:
+        exe, prefix = sys.executable, [os.path.abspath(__file__)]
+        if not exe or not os.path.isfile(exe):
+            raise BackgroundError("Could not find the Python program that is running TreeRot, "
+                                  "so a background task could not be set up.")
+    return exe, prefix + [root] + list(args) + ["--progress", "none", "--status-file", status_file]
+
+
+def build_task_xml(exe, arguments, user, logon_type="Password"):
+    """The task definition. It has no trigger on purpose: /Run starts it on demand, so no start
+    time can pass while the user types the password, and a quick scan is never run a second
+    time by a trigger that comes due after it ended."""
+    import xml.etree.ElementTree as ET
+
+    for value in [exe, user] + list(arguments):
+        if _NOT_TASK_TEXT.search(value):
+            raise BackgroundError(f"A background task cannot carry this text: {ascii(value)}")
+
+    def add(parent, tag, text=None, **attrs):
+        node = ET.SubElement(parent, tag, attrs)
+        node.text = text
+        return node
+    task = ET.Element("Task", {"version": "1.2", "xmlns": TASK_NS})
+    info = add(task, "RegistrationInfo")
+    add(info, "Description", f"{APP_NAME} background scan")
+    who = add(add(task, "Principals"), "Principal", id="Author")
+    add(who, "UserId", user)
+    add(who, "LogonType", logon_type)
+    add(who, "RunLevel", "LeastPrivilege")
+    settings = add(task, "Settings")
+    for tag, text in (("MultipleInstancesPolicy", "IgnoreNew"),
+                      ("DisallowStartIfOnBatteries", "false"),
+                      ("StopIfGoingOnBatteries", "false"),
+                      ("AllowStartOnDemand", "true"),
+                      ("Enabled", "true"),
+                      ("ExecutionTimeLimit", "PT0S"),
+                      ("Priority", "7")):
+        add(settings, tag, text)
+    run = add(add(task, "Actions", Context="Author"), "Exec")
+    add(run, "Command", exe)
+    add(run, "Arguments", subprocess.list2cmdline(arguments))
+    return '<?xml version="1.0" encoding="UTF-16"?>\n' + ET.tostring(task, encoding="unicode")
+
+
+def write_task_xml(path, xml_text):
+    with open(path, "w", encoding="utf-16") as f:
+        f.write(xml_text)
+
+
+def schtasks_exe(platform=None, environ=None):
+    """schtasks by its full path on Windows: the name alone would also find a schtasks.exe in the
+    current folder, and that program would be the one asking for the password."""
+    if (platform or sys.platform) != "win32":
+        return "schtasks"
+    env = os.environ if environ is None else environ
+    return ntpath.join(env.get("SystemRoot") or "C:\\Windows", "System32", "schtasks.exe")
+
+
+def windows_user():
+    env = os.environ
+    user = env.get("USERNAME", "")
+    if not user:
+        raise BackgroundError("Could not tell which Windows user you are (USERNAME is not set).")
+    return f"{env['USERDOMAIN']}\\{user}" if env.get("USERDOMAIN") else user
+
+
+def _only_on_windows():
+    if sys.platform != "win32":
+        raise BackgroundError("Background scans need Windows Task Scheduler.")
+
+
+def _console_run(cmd):
+    """Runs schtasks in its own visible console so Windows itself can ask for the password.
+    Nothing is redirected: the prompt must reach the screen and the typing must reach schtasks,
+    never this program. The price is that Windows' error text cannot be read here either."""
+    _only_on_windows()
+    return subprocess.run(cmd, creationflags=0x00000010)     # CREATE_NEW_CONSOLE
+
+
+def _quiet_run(cmd):
+    _only_on_windows()
+    try:
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=SCHTASKS_TIMEOUT, creationflags=0x08000000)  # CREATE_NO_WINDOW
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 1, b"", b"Windows Task Scheduler did not answer.")
+
+
+def _windows_text(res):
+    """What schtasks printed, if it was captured. It writes in the console's code page."""
+    out = getattr(res, "stderr", b"") or getattr(res, "stdout", b"") or b""
+    try:
+        return out.decode("oem", "replace").strip()
+    except LookupError:                 # there is no such codec outside Windows
+        return out.decode("utf-8", "replace").strip()
+
+
+def _job_path(job_id):
+    return os.path.join(JOBS_DIR, job_id + ".json")
+
+
+def _save_job(job):
+    """Replaces the record whole, so the panel never reads half of one."""
+    path = _job_path(job["id"])
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(job, f)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _forget_job(job_id):
+    try:
+        os.remove(_job_path(job_id))
+    except FileNotFoundError:
+        pass
+
+
+def _names_our_task(job):
+    """A task name is ours only if it is exactly the name this program gives that job id."""
+    job_id = job.get("id")
+    return (isinstance(job_id, str) and _JOB_ID.match(job_id) is not None
+            and job.get("task") == TASK_PREFIX + job_id)
+
+
+def _own_record(job):
+    """The record on disk for a job, proving the task is one this program created. Nothing is
+    ever done to a task without it."""
+    if _names_our_task(job):
+        try:
+            with open(_job_path(job["id"]), encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            record = None
+        if isinstance(record, dict) and _names_our_task(record) and record["task"] == job["task"]:
+            return record
+    raise BackgroundError("This is not a task TreeRot has a record of, so it was left alone.")
+
+
+def _delete_task(task, run):
+    """Deletes the task, or raises if it is still there afterwards."""
+    exe = schtasks_exe()
+    res = run([exe, "/Delete", "/TN", task, "/F"])
+    if res.returncode != 0 and run([exe, "/Query", "/TN", task]).returncode == 0:
+        raise BackgroundError(f"Windows would not delete the background task. {_windows_text(res)}".strip())
+
+
+def _clear_the_way(status_file, runner):
+    """A status file left at this path could pass for this run's result: a scan stopped by bad
+    arguments never writes one. So the old file goes before the task exists, or nothing starts."""
+    for other in load_jobs():
+        if _same_path(other["status_file"], status_file):
+            if job_state(other)[0] in ("starting", "running", "stalled"):
+                raise BackgroundError(
+                    "Another background scan is writing this report. End it or choose another "
+                    "file. Background scans shows it.")
+            remove_job(other, runner=runner)    # its report is about to be replaced
+    try:
+        os.remove(status_file)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        raise BackgroundError(f"The old status file {status_file} could not be removed, so its "
+                              f"result could be mistaken for this scan's. {e}")
+
+
+def start_background_scan(root, args, report, runner=None):
+    """
+    Creates and starts a Windows scheduled task for the scan. Windows' console prompt collects
+    the password (/RP *), so this program never sees it. Returns the job record.
+    Slow on a slow share and waits for the user: never call it on the Tk thread.
+    """
+    if is_mapped_drive(root):
+        raise BackgroundError("Mapped drive letters do not exist in a background task. Enter the "
+                              "folder's full network path instead, for example \\\\server\\share.")
+    if is_mapped_drive(report):
+        raise BackgroundError("Mapped drive letters do not exist in a background task. Save the "
+                              "report by its full network path instead, for example "
+                              "\\\\server\\share\\report.html.")
+    root, report = _full_path(root), _full_path(report)
+    if not os.path.isdir(os.path.dirname(report)):
+        raise BackgroundError(f"The report's folder does not exist or is not reachable: {report}")
+    status_file = report + ".status.json"
+    user = windows_user()
+    exe, arguments = background_command(root, list(args) + ["--report", report], status_file)
+    xml_text = build_task_xml(exe, arguments, user)
+    _clear_the_way(status_file, runner)
+
+    job_id = f"{datetime.now():%Y%m%d-%H%M%S}-{os.urandom(2).hex()}"
+    task = TASK_PREFIX + job_id
+    job = {"id": job_id, "task": task, "root": root, "report": report, "status_file": status_file,
+           "started": time.time()}
+    os.makedirs(JOBS_DIR, exist_ok=True)
+    _save_job(job)                       # first, so no task ever exists without a record
+    create = runner or _console_run
+    run = runner or _quiet_run
+    xml_path = os.path.join(JOBS_DIR, job_id + ".xml")
+    created = False
+    try:
+        write_task_xml(xml_path, xml_text)
+        res = create([schtasks_exe(), "/Create", "/TN", task, "/XML", xml_path, "/RU", user,
+                      "/RP", "*"])
+        if res.returncode != 0:
+            raise BackgroundError(
+                "The background task could not be created. "
+                + (_windows_text(res) or "Check your password and that you may create scheduled tasks.")
+                + " The README shows how to set this up by hand.")
+        created = True
+        res = run([schtasks_exe(), "/Run", "/TN", task])
+        if res.returncode != 0:
+            try:
+                _delete_task(task, run)
+            except (BackgroundError, OSError) as e:
+                raise BackgroundError("The background task was created but could not be started, "
+                                      f"and could not be removed either ({e}). Remove it under "
+                                      "Background scans.")
+            created = False
+            raise BackgroundError("The background task was created but could not be started. "
+                                  + _windows_text(res))
+    except Exception:
+        if not created:
+            _forget_job(job_id)
+        raise
+    finally:
+        try:
+            os.remove(xml_path)
+        except OSError:
+            pass
+    return job
+
+
+def load_jobs():
+    """The saved job records. A file that is not exactly a record of ours is skipped."""
+    jobs = []
+    try:
+        names = sorted(os.listdir(JOBS_DIR))
+    except OSError:
+        return jobs
+    for n in names:
+        if n.endswith(".json"):
+            try:
+                with open(os.path.join(JOBS_DIR, n), encoding="utf-8") as f:
+                    job = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if (isinstance(job, dict) and _names_our_task(job) and n == job["id"] + ".json"
+                    and all(isinstance(job.get(k), str) for k in ("root", "report", "status_file"))):
+                jobs.append(job)
+    return jobs
+
+
+def _report_in(status, job):
+    """The report of a finished scan, if it is there. The status file sits next to the report,
+    often on a share others can write to, so it may only confirm the path this job recorded:
+    what it names gets opened."""
+    if status is None or status["state"] != "finished":
+        return None
+    path = status.get("report")
+    if not isinstance(path, str) or not path or not _same_path(path, job["report"]):
+        return None
+    return path if os.path.isfile(path) else None
+
+
+def job_row(job):
+    """(state, text for the panel, report path or None), from one read of the status file.
+    state: starting | silent | running | stalled | ended | finished | failed.
+    Reads the status file, maybe on a dead share: never call it on the Tk thread."""
+    s = read_status(job["status_file"])
+    if s is not None and s["state"] == "finished":
+        report = _report_in(s, job)
+        if report:
+            return "finished", f"Finished. Report: {report}", report
+        return "finished", "Finished, but the report file was not found.", None
+    if s is not None and s["state"] == "failed":
+        return "failed", str(s.get("error") or "The scan failed."), None
+    if job.get("ended"):
+        return "ended", "You ended this scan.", None
+    if s is None:
+        started = job.get("started")
+        if isinstance(started, (int, float)) and time.time() - started > STARTING_GRACE_SECONDS:
+            return ("silent", "The scan did not start, or failed before it could write its status. "
+                              "The report's folder may also be out of reach.", None)
+        return ("starting", "Waiting for the task to start. If this stays, it failed before it "
+                            "could write its status.", None)
+    if status_is_stale(s):
+        return ("stalled", "The scan seems to have stopped: no news for over "
+                           f"{STATUS_STALE_SECONDS // 60} minutes. The computer may have restarted, "
+                           "or the share may have stopped answering.", None)
+    parts = (s.get("percent"), s.get("counts"), s.get("times"))
+    return "running", "  ".join(str(x) for x in parts if x) or "Running.", None
+
+
+def job_state(job):
+    """Returns (state, text for the panel). See job_row."""
+    return job_row(job)[:2]
+
+
+def job_report(job):
+    """The report to open: only for a finished scan, and only if the file exists."""
+    return _report_in(read_status(job["status_file"]), job)
+
+
+def end_job(job, runner=None):
+    """Stops the scan by ending its task. The record stays so the panel can say what happened."""
+    record = _own_record(job)
+    if record.get("task_removed"):
+        return
+    res = (runner or _quiet_run)([schtasks_exe(), "/End", "/TN", record["task"]])
+    if res.returncode != 0:
+        raise BackgroundError(f"The background task could not be ended. {_windows_text(res)}".strip())
+    record["ended"] = True
+    _save_job(record)
+
+
+def remove_job(job, runner=None):
+    """Deletes the scheduled task and the job record. The report and its status stay."""
+    record = _own_record(job)
+    if not record.get("task_removed"):
+        _delete_task(record["task"], runner or _quiet_run)
+    _forget_job(record["id"])
+
+
+def clean_finished_jobs(runner=None):
+    """
+    Tasks that are over are deleted on the next launch, which also drops the password Windows
+    stored for them. The job record stays until the user presses Remove, so someone who logged
+    off still sees the result and can open the report.
+    Slow work: never call it on the Tk thread.
+    """
+    for job in load_jobs():
+        if job.get("task_removed") or job_state(job)[0] not in ("finished", "failed", "ended"):
+            continue
+        try:
+            _delete_task(job["task"], runner or _quiet_run)
+            job["task_removed"] = True
+            if os.path.isfile(_job_path(job["id"])):     # not if Remove came first
+                _save_job(job)
+        except (BackgroundError, OSError):
+            pass                         # still there: the next launch tries again
 
 
 def gui_unavailable(reason):
