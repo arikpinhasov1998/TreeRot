@@ -262,9 +262,10 @@ class OpenReport(BackgroundGui):
         w._jobs_panel()
 
         def shown():
-            w._jobs_ui["tv"].selection_set(job["id"])
-            w.update()
-            then()
+            ui = w._jobs_ui
+            ui["tv"].selection_set(job["id"])
+            # The selection event has run once the full text of the row is showing.
+            self.wait(w, lambda: str(ui["detail"].cget("text")) == ui["tv"].set(job["id"], "detail"), then)
         self.wait(w, lambda: self.row(w, job) == label, shown)
 
     def test_running_with_a_report_path_offers_nothing_to_open(self):
@@ -323,9 +324,10 @@ class EndAndRemove(BackgroundGui):
         w._jobs_panel()
 
         def shown():
-            w._jobs_ui["tv"].selection_set(job["id"])
-            w.update()
-            then()
+            ui = w._jobs_ui
+            ui["tv"].selection_set(job["id"])
+            # The selection event has run once the full text of the row is showing.
+            self.wait(w, lambda: str(ui["detail"].cget("text")) == ui["tv"].set(job["id"], "detail"), then)
         self.wait(w, lambda: self.row(w, job) == label, shown)
 
     def test_remove_a_finished_scan_runs_off_the_tk_thread_without_asking(self):
