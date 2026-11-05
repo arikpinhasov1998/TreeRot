@@ -151,11 +151,17 @@ def load_settings():
 
 
 def save_settings(data):
+    """Replaces the file whole: the window and a background scan may both be saving."""
+    tmp = f"{SETTINGS_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp, SETTINGS_FILE)
     except OSError:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def totals_key(root, excludes, follow_symlinks):
@@ -4910,6 +4916,7 @@ def _run_cli(a, root, status=None):
                       "modified or created" if uses_created else "modified")
     if rows:                                # finished: remember totals for the next progress bar
         root_info = next(r["info"] for r in rows if r["info"].parent is None)
+        settings = load_settings()          # the window may have saved during a long scan
         remember_totals(settings, tkey, len(rows), root_info.total_files)
         save_settings(settings)
     if status and not rows:
