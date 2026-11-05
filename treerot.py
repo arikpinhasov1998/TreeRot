@@ -3802,6 +3802,8 @@ class StatusWriter:
         """Write the final state, retrying: on Windows a reader holding the file open makes
         the replace fail, and nothing would ever correct a stale "running". True if written."""
         self._stop.set()
+        if state != "finished":
+            self.report = None         # only a finished scan has a report to point at
         ok = False
         for i in range(self.FINISH_TRIES):
             if i:

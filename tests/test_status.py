@@ -165,6 +165,46 @@ class Status(unittest.TestCase):
             self.assertFalse(os.path.exists(rep))
             self.assertIsNone(app.read_status(st)["report"])
 
+    def test_failed_runs_never_claim_a_report(self):
+        P = {"phase": "scan", "fraction": 0.5, "exact": False, "folders": 1, "files": 2,
+             "bytes": 3}
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(os.path.join(d, "s"), {"a/f.txt": OLD})
+            src, st, rep = os.path.join(d, "s"), os.path.join(d, "x.json"), os.path.join(d, "r.html")
+            args = [src, "--format", "summary", "-q", "--report", rep, "--status-file", st]
+            cases = [
+                ("ReportError", mock.patch.object(app, "write_report",
+                                                  side_effect=app.ReportError("nope")), None),
+                ("OSError", mock.patch.object(app, "write_report",
+                                              side_effect=OSError("disk")), None),
+                ("exception", mock.patch.object(app, "scan_tree",
+                                                side_effect=RuntimeError("boom")),
+                 RuntimeError),
+                ("interrupt", mock.patch.object(app, "scan_tree",
+                                                side_effect=KeyboardInterrupt), KeyboardInterrupt),
+            ]
+            for name, patch, exc in cases:
+                with self.subTest(name), patch:
+                    if exc:
+                        with self.assertRaises(exc):
+                            app.run_cli(app.build_parser().parse_args(args), src)
+                    else:
+                        self.assertEqual(app.main(args), 2)
+                s = app.read_status(st)
+                self.assertEqual(s["state"], "failed")
+                self.assertIsNone(s["report"])
+            self.assertFalse(os.path.exists(rep))
+            bad = os.path.join(d, "missing")
+            self.assertEqual(app.main([bad, "-q", "--report", rep, "--status-file", st]), 2)
+            self.assertIsNone(app.read_status(st)["report"])
+
+    def test_finished_keeps_the_report_and_failed_drops_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = app.StatusWriter(os.path.join(d, "x.json"), "/r.html")
+            self.assertEqual(app.read_status(w.path)["report"], "/r.html")
+            w.finish("failed", "x")
+            self.assertIsNone(app.read_status(w.path)["report"])
+
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:
             w = app.StatusWriter(os.path.join(d, "x.json"))
