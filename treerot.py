@@ -3709,15 +3709,91 @@ def read_exclude_file(path):
         return [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
 
 
+class StatusWriter:
+    """Keeps a small JSON file up to date, so a window can follow a scan running elsewhere.
+
+    Each write goes to a temporary file that then replaces the real one, so a reader never
+    sees a half-written file. A failed write is ignored: it must never stop a scan."""
+
+    INTERVAL = 5
+
+    def __init__(self, path, report=None):
+        self.path, self.report = path, report
+        self.meter = ProgressMeter()
+        self.last = None
+        self.error_text = ""
+        self._write("running")
+
+    def _write(self, state, percent="", counts="", times="", error=""):
+        tmp = self.path + ".tmp"
+        try:
+            data = {"state": state, "percent": percent, "counts": counts, "times": times,
+                    "updated": time.time(), "report": self.report, "error": error}
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.path)
+        except (OSError, ValueError, TypeError):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass                   # a status problem must never stop the scan
+
+    def update(self, p):
+        try:
+            v = self.meter.update(p)
+            now = time.monotonic()
+            if self.last is None or now - self.last >= self.INTERVAL:
+                self.last = now
+                pct, counts, times = progress_parts(p, v, "  \u00b7  ")
+                self._write("running", pct, counts, times)
+        except Exception:
+            pass                       # progress text is never worth stopping a scan for
+
+    def finish(self, state, error=""):
+        self._write(state, "100%" if state == "finished" else "", error=error)
+
+
+def read_status(path):
+    """The status file as a dict, or None if it is missing, unreadable or not a status file."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def run_cli(a, root):
     """Headless scan. Returns a process exit code."""
+    if not a.status_file:
+        return _run_cli(a, root)
+    status = StatusWriter(a.status_file, a.report)
+    try:
+        rc = _run_cli(a, root, status)
+    except BaseException as e:
+        status.finish("failed", str(e) or type(e).__name__)
+        raise
+    if rc == 0:
+        status.finish("finished")
+    else:
+        status.finish("failed", status.error_text or f"The scan failed (exit code {rc}).")
+    return rc
+
+
+def _run_cli(a, root, status=None):
+    """Headless scan. Returns a process exit code."""
     if not os.path.isdir(root):
-        sys.stderr.write(f"Error: '{root}' is not a folder, or it is not reachable from here.\n")
+        text = f"Error: '{root}' is not a folder, or it is not reachable from here."
+        sys.stderr.write(text + "\n")
+        if status:
+            status.error_text = text
         return 2
     if a.date_from or a.date_to:
         d_from, d_to = a.date_from, a.date_to
         if d_from and d_to and d_from > d_to:
             sys.stderr.write("Error: --from is later than --to.\n")
+            if status:
+                status.error_text = "Error: --from is later than --to."
             return 2
     else:
         d_from, d_to = datetime.now() - timedelta(days=365.25 * (a.years or 2.0)), None
@@ -3730,6 +3806,8 @@ def run_cli(a, root):
             excludes += read_exclude_file(a.exclude_file)
         except OSError as e:
             sys.stderr.write(f"Error: cannot read --exclude-file: {e}\n")
+            if status:
+                status.error_text = f"Cannot read the exclude file: {e}"
             return 2
 
     show = "red" if a.stale_only else a.show
@@ -3758,7 +3836,14 @@ def run_cli(a, root):
     pmode = "none" if a.quiet else a.progress
     if pmode == "auto":
         pmode = "bar" if sys.stderr.isatty() else "none"
-    reporter = CliProgress(pmode, sys.stderr) if pmode != "none" else None
+    printer = CliProgress(pmode, sys.stderr) if pmode != "none" else None
+    if status:
+        def reporter(p):
+            status.update(p)
+            if printer:
+                printer(p)
+    else:
+        reporter = printer
 
     t0 = time.monotonic()
     scan_started = datetime.now()
@@ -3780,8 +3865,8 @@ def run_cli(a, root):
             date_from_ts=d_from.timestamp() if d_from else None,
             date_to_ts=d_to.timestamp() if d_to else None, totals=totals, totals_exact=exact,
             created=a.created)
-    if reporter:
-        reporter.finish()
+    if printer:
+        printer.finish()
     uses_created = a.created == "ctime" or (a.created == "auto" and CREATED_NATIVE)
     rows = build_rows(folders, d_from, d_to,
                       "modified or created" if uses_created else "modified")
@@ -3807,9 +3892,13 @@ def run_cli(a, root):
             write_report(a.report, rows, meta, pdf_tree=a.report_tree, browser=a.browser)
         except ReportError as e:
             sys.stderr.write(f"Error: {e}\n")
+            if status:
+                status.error_text = str(e)
             return 2
         except OSError as e:
             sys.stderr.write(f"Error: cannot write the report to {a.report}: {e}\n")
+            if status:
+                status.error_text = f"Cannot write the report to {a.report}: {e}"
             return 2
         if not a.quiet:
             sys.stderr.write(f"Wrote report {a.report}\n")
@@ -3953,6 +4042,9 @@ def build_parser():
                         "unused folder (default 2). The scan itself always covers every level.")
     g.add_argument("--browser", metavar="PATH",
                    help="PDF only: browser to print with, if it is not found automatically")
+    g.add_argument("--status-file", metavar="FILE",
+                   help="keep FILE up to date with the scan's progress and result, as JSON "
+                        "(used by background scans)")
     g.add_argument("--show", choices=["all", "red", "green", "gray"], default="all",
                    help="only folders that are unused (red), used (green) or empty/error (gray)")
     g.add_argument("--stale-only", action="store_true", help="same as --show red")
