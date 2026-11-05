@@ -610,7 +610,16 @@ def classify(info, lo, hi):
 
 
 def fmt_ts(ts):
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+    if not ts:
+        return ""
+    try:
+        when = datetime.fromtimestamp(ts)
+    except (OSError, OverflowError, ValueError):   # Windows refuses any time before 1970
+        try:
+            when = datetime(1970, 1, 1) + timedelta(seconds=ts)
+        except (OverflowError, ValueError):        # no date can hold it
+            return ""
+    return when.strftime("%Y-%m-%d %H:%M")
 
 
 def fmt_size(n):
