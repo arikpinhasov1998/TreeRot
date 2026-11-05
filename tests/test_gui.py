@@ -797,6 +797,31 @@ class FilesInTree(GuiCase):
             self.assertIsNone(results["more_text"])
 
 
+class ReportFailure(GuiCase):
+    def test_any_error_in_the_export_worker_shows_and_the_window_recovers(self):
+        from tkinter import filedialog
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+            bad = UnicodeEncodeError("utf-8", "caf\udce9", 3, 4, "surrogates not allowed")
+
+            def check(w):
+                def shown(title, msg):
+                    seen.update(err=msg, button=str(w.report_btn.cget("state")),
+                                status=w.status_var.get())
+                err.side_effect = shown
+                w._save_report("html", "2", None)
+
+            with mock.patch.object(filedialog, "asksaveasfilename",
+                                   return_value=os.path.join(d, "r.html")), \
+                    mock.patch.object(app, "write_report", side_effect=bad), \
+                    mock.patch.object(app_messagebox(), "showerror") as err:
+                self.drive(d, check, lambda: "err" in seen)
+            self.assertIn("surrogates", seen.get("err", ""))
+            self.assertEqual(seen["button"], "normal")
+            self.assertEqual(seen["status"], "The report was not saved.")
+
+
 def app_messagebox():
     from tkinter import messagebox
     return messagebox

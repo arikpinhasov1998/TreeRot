@@ -76,3 +76,31 @@ class EmbeddedData(unittest.TestCase):
             data = json.loads(raw)
             self.assertEqual(data["meta"]["excludes"], [name])
             self.assertEqual(data["meta"]["root"], name)
+
+
+class SurrogateNames(unittest.TestCase):
+    """Linux can hand back file names that are not UTF-8, as lone surrogates."""
+    BAD = "caf\udce9"
+
+    def _rows(self, d):
+        make_tree(d, {"x/f.txt": OLD})
+        rows = list(scan_rows(d, datetime(2024, 1, 1)).values())
+        for r in rows:
+            if r["info"].parent is not None:
+                r["info"].path = os.path.join(d, self.BAD)
+        return rows
+
+    def test_html_report_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "r.html")
+            app.write_html_report(out, self._rows(d), meta_for(d))
+            with open(out, encoding="utf-8") as f:
+                self.assertIn("caf", f.read())
+            self.assertEqual(os.path.exists(out + ".part"), False)
+
+    def test_csv_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "r.csv")
+            app.write_csv(out, self._rows(d))
+            with open(out, encoding="utf-8-sig", newline="") as f:
+                self.assertEqual(len(list(csv.reader(f))), 3)

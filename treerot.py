@@ -945,7 +945,8 @@ def row_to_csv(r):
 
 def write_csv(path, rows):
     # utf-8-sig so Excel opens non-ASCII folder names correctly
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    # errors="replace": on Linux a name that is not UTF-8 must not lose the whole file
+    with open(path, "w", newline="", encoding="utf-8-sig", errors="replace") as f:
         w = csv.writer(f)
         w.writerow(CSV_HEADERS)
         for r in rows:
@@ -2892,8 +2893,8 @@ def run_gui(preload=None, on_ready=None):
                     self.q.put(("report_done", fn, None))
                 except ReportCanceled:
                     self.q.put(("report_canceled",))
-                except (ReportError, OSError) as e:
-                    self.q.put(("report_done", fn, str(e)))
+                except Exception as e:    # the window must recover whatever went wrong
+                    self.q.put(("report_done", fn, str(e) or type(e).__name__))
             self._report_thread = threading.Thread(target=work, daemon=True)
             self._report_thread.start()
 
@@ -3352,7 +3353,7 @@ def write_html_report(path, rows, meta, folder_basis=False, pdf=None, cancel_eve
     _check_canceled(cancel_event)
     part = path + ".part"
     try:
-        with open(part, "w", encoding="utf-8") as f:
+        with open(part, "w", encoding="utf-8", errors="replace") as f:   # a name may not be UTF-8
             for i in range(0, len(page), 1 << 20):     # a share can be slow: look up every MB
                 f.write(page[i:i + (1 << 20)])
                 _check_canceled(cancel_event)
