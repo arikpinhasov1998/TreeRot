@@ -5114,7 +5114,7 @@ def _run_cli(a, root, status=None):
         else:
             out = sys.stdout
             if a.output:
-                to_file = out = open(a.output, "w", encoding="utf-8")
+                to_file = out = open(a.output, "w", encoding="utf-8", errors="replace")
             if fmt == "tree" and rows:
                 print_tree(rows, out, a.depth, show, a.sort, use_color and not a.output)
                 out.write("\n")

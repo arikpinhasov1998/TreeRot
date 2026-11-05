@@ -137,3 +137,24 @@ class FindingAndName(unittest.TestCase):
         self.assertIn("textContent = S.files === 0\n", html)
         self.assertIn(": (C.red.folders === 0\n", html)
         self.assertNotIn("C.red.bytes === 0", html)
+
+
+class SurrogateTextOutput(unittest.TestCase):
+    def test_o_file_tree_output_survives_a_name_that_is_not_utf8(self):
+        real = app.build_rows
+
+        def renamed(*a, **kw):
+            rows = real(*a, **kw)
+            for r in rows:
+                if r["info"].parent is not None:
+                    r["info"].path = os.path.join(r["info"].parent, "caf\udce9")
+            return rows
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(os.path.join(d, "s"), {"x/f.txt": OLD})
+            out = os.path.join(d, "out.txt")
+            with mock.patch.object(app, "build_rows", renamed):
+                rc = app.main([os.path.join(d, "s"), "--from", "2024-01-01", "--format", "tree",
+                               "-q", "--progress", "none", "-o", out])
+            self.assertEqual(rc, 0)
+            with open(out, encoding="utf-8") as f:
+                self.assertIn("caf", f.read())
