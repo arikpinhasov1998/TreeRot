@@ -175,6 +175,14 @@ class Status(unittest.TestCase):
                 with open(p, "w") as f:
                     f.write(text)
                 self.assertIsNone(app.read_status(p), text)
+            for text in ("{}", '{"state": "weird"}', '{"state": 3}'):
+                with open(p, "w") as f:
+                    f.write(text)
+                self.assertIsNone(app.read_status(p), text)
+            for st in ("running", "finished", "failed"):
+                with open(p, "w") as f:
+                    f.write('{"state": "%s"}' % st)
+                self.assertEqual(app.read_status(p)["state"], st)
             with open(p, "wb") as f:
                 f.write(b"\xff\xfe\x00")
             self.assertIsNone(app.read_status(p))

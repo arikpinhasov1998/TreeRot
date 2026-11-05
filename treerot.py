@@ -3832,13 +3832,15 @@ def status_is_stale(data, now=None):
 
 
 def read_status(path):
-    """The status file as a dict, or None if it is missing, unreadable or not a status file."""
+    """The status file as a dict, or None if it is missing, unreadable or not a status file
+    (no known state), so a reader can index data["state"] safely."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    ok = isinstance(data, dict) and data.get("state") in ("running", "finished", "failed")
+    return data if ok else None
 
 
 def run_cli(a, root):
