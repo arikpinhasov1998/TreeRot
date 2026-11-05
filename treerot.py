@@ -1149,8 +1149,8 @@ def _quiet_run(cmd):
     try:
         return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
                               timeout=SCHTASKS_TIMEOUT, creationflags=0x08000000)  # CREATE_NO_WINDOW
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(cmd, 1, b"", b"Windows Task Scheduler did not answer.")
+    except subprocess.TimeoutExpired:      # no answer is not an answer: never a return code
+        raise BackgroundError("Windows Task Scheduler did not answer. Try again in a moment.")
 
 
 def _windows_text(res):
@@ -1211,10 +1211,16 @@ def _own_record(job):
 
 
 def _delete_task(task, run):
-    """Deletes the task, or raises if it is still there afterwards."""
+    """Deletes the task, or raises unless it is certainly gone. schtasks gives the same exit code
+    and a translated message for "not found" and for any other trouble, so "gone" means only
+    this: Windows listed its tasks, and this one is not among them. On any doubt the record
+    stays, or a task holding a stored password would be left with nothing pointing at it."""
     exe = schtasks_exe()
     res = run([exe, "/Delete", "/TN", task, "/F"])
-    if res.returncode != 0 and run([exe, "/Query", "/TN", task]).returncode == 0:
+    if res.returncode == 0:
+        return
+    tasks = run([exe, "/Query", "/FO", "CSV", "/NH"])
+    if tasks.returncode != 0 or tasks.stdout is None or task.encode("ascii") in tasks.stdout:
         raise BackgroundError(f"Windows would not delete the background task. {_windows_text(res)}".strip())
 
 

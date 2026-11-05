@@ -254,12 +254,13 @@ class Consoles(unittest.TestCase):
         self.assertEqual(kw.get("stdin"), subprocess.DEVNULL)
         self.assertTrue(kw.get("timeout"))
 
-    def test_a_schtasks_that_does_not_answer_is_a_failure(self):
+    def test_a_schtasks_that_does_not_answer_is_an_error_not_an_answer(self):
         def slow(cmd, **kw):
             raise subprocess.TimeoutExpired(cmd, 1)
         with mock.patch.object(app.subprocess, "run", slow), \
-                mock.patch.object(app.sys, "platform", "win32"):
-            self.assertNotEqual(app._quiet_run(["schtasks"]).returncode, 0)
+                mock.patch.object(app.sys, "platform", "win32"), \
+                self.assertRaises(app.BackgroundError):
+            app._quiet_run(["schtasks"])
 
     def test_neither_runs_outside_windows(self):
         with mock.patch.object(app.subprocess, "run") as run, \
@@ -269,6 +270,16 @@ class Consoles(unittest.TestCase):
             with self.assertRaises(app.BackgroundError):
                 app._quiet_run(["schtasks"])
         run.assert_not_called()
+
+
+def refusing_scheduler(cmd, **kw):
+    """A Task Scheduler that will not delete: the task is still listed."""
+    if "/Delete" in cmd:
+        refusing_scheduler.name = cmd[cmd.index("/TN") + 1]
+    if "/Query" in cmd:
+        listing = '"\\%s","N/A","Ready"\r\n' % refusing_scheduler.name
+        return subprocess.CompletedProcess(cmd, 0, listing.encode(), b"")
+    return subprocess.CompletedProcess(cmd, 0 if "/Create" in cmd else 1, b"", b"Access is denied.")
 
 
 class JobCase(unittest.TestCase):
@@ -509,11 +520,9 @@ class Jobs(JobCase):
         self.assertEqual(os.listdir(app.JOBS_DIR), [])
 
     def test_run_failure_keeps_the_record_if_the_task_could_not_be_removed(self):
-        def runner(cmd, **kw):
-            ok = "/Create" in cmd or "/Query" in cmd
-            return subprocess.CompletedProcess(cmd, 0 if ok else 1, b"", b"Access is denied.")
         with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
+            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"),
+                                      runner=refusing_scheduler)
         self.assertIn("Background scans", str(c.exception))
         self.assertEqual(len(app.load_jobs()), 1)
 
@@ -726,21 +735,46 @@ class OnlyOurTasks(JobCase):
 
     def test_remove_keeps_the_record_while_the_task_still_exists(self):
         job = self.start()
-
-        def fail(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 0 if "/Query" in cmd else 1, b"", b"Access is denied.")
         with self.assertRaises(app.BackgroundError) as c:
-            app.remove_job(job, runner=fail)
+            app.remove_job(job, runner=refusing_scheduler)
         self.assertIn("Access is denied.", str(c.exception))
         self.assertEqual(len(app.load_jobs()), 1)
 
     def test_remove_forgets_a_task_someone_already_deleted(self):
         job = self.start()
+        others = b'"\\Other","N/A","Ready"\r\n'
 
         def gone(cmd, **kw):
+            if "/Query" in cmd:
+                self.assertNotIn("/TN", cmd)    # the list, whatever language it is in
+                return subprocess.CompletedProcess(cmd, 0, others, b"")
             return subprocess.CompletedProcess(cmd, 1, b"", b"not found")
         app.remove_job(job, runner=gone)
         self.assertEqual(app.load_jobs(), [])
+
+    def test_any_doubt_keeps_the_record(self):
+        job = self.start()
+
+        def delete_fails(listing):
+            def run(cmd, **kw):
+                return listing(cmd) if "/Query" in cmd else subprocess.CompletedProcess(cmd, 1, b"", b"x")
+            return run
+
+        def timed_out(cmd, **kw):
+            raise app.BackgroundError("Windows Task Scheduler did not answer.")
+
+        def listing_timed_out(cmd):
+            raise app.BackgroundError("Windows Task Scheduler did not answer.")
+        for name, runner in (
+                ("delete does not answer", timed_out),
+                ("list does not answer", delete_fails(listing_timed_out)),
+                ("list fails", delete_fails(lambda c: subprocess.CompletedProcess(c, 1, b"", b"not found"))),
+                ("list has no output", delete_fails(lambda c: subprocess.CompletedProcess(c, 0, None, b""))),
+                ("list names it", delete_fails(lambda c: subprocess.CompletedProcess(
+                    c, 0, job["task"].encode(), b"")))):
+            with self.subTest(name), self.assertRaises(app.BackgroundError):
+                app.remove_job(job, runner=runner)
+            self.assertEqual(len(app.load_jobs()), 1)
 
     def test_remove_leaves_report_and_status(self):
         job = self.start()
@@ -776,10 +810,7 @@ class Cleanup(JobCase):
     def test_a_task_that_could_not_be_deleted_is_tried_again(self):
         job = self.start()
         self.write_status(job, state="finished", report=job["report"])
-
-        def fail(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 0 if "/Query" in cmd else 1, b"", b"denied")
-        app.clean_finished_jobs(runner=fail)
+        app.clean_finished_jobs(runner=refusing_scheduler)
         self.assertFalse(app.load_jobs()[0].get("task_removed"))
 
     def test_record_files_are_replaced_whole(self):

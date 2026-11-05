@@ -8,7 +8,7 @@ import time
 from unittest import mock
 
 from tests.helpers import app
-from tests.test_background import JobCase
+from tests.test_background import JobCase, refusing_scheduler
 from tests.test_gui import GuiCase, app_messagebox
 
 
@@ -391,7 +391,7 @@ class EndAndRemove(BackgroundGui):
 
         def refuse(cmd):
             self.schtasks_seen = True
-            return subprocess.CompletedProcess(cmd, 0 if "/Query" in cmd else 1, b"", b"Access is denied.")
+            return refusing_scheduler(cmd)
         with mock.patch.object(app, "_quiet_run", refuse):
             def check(w):
                 def then():
