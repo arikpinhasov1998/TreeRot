@@ -389,6 +389,27 @@ class Jobs(JobCase):
         self.assertEqual(self.cmds, [])
         self.assertEqual(app.load_jobs(), [])
 
+    def test_mapped_drive_cannot_hide_behind_a_short_path(self):
+        # With a mapped current drive, these only show their drive letter once made full.
+        def full(path):
+            return "Z:\\data" if path == "\\data" else "Z:\\work\\" + path
+
+        def is_mapped(path, drive_type=None):
+            return path.startswith("Z:")
+        good = os.path.join(self.d, "r.html")
+        with mock.patch.object(app, "is_mapped_drive", is_mapped), \
+                mock.patch.object(app.os.path, "abspath", full):
+            for short in ("data", "\\data"):
+                with self.subTest(short=short):
+                    self.assertIn("\\\\server\\share", app.check_background_folder(short))
+                    with self.assertRaises(app.BackgroundError) as c:
+                        app.start_background_scan(short, [], "\\\\srv\\s\\r.html", runner=self.run_ok)
+                    self.assertIn("\\\\server\\share", str(c.exception))
+                    with self.assertRaises(app.BackgroundError) as c:
+                        app.start_background_scan("\\\\srv\\s", [], short + ".html", runner=self.run_ok)
+                    self.assertIn("\\\\server\\share", str(c.exception))
+        self.assertEqual(self.cmds, [])
+
     def test_relative_paths_become_full_ones(self):
         cwd = os.getcwd()
         os.chdir(self.d)

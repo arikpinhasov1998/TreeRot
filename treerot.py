@@ -1001,6 +1001,7 @@ def is_mapped_drive(path, drive_type=None):
 
 def check_background_folder(root):
     """Why this folder can't be scanned in the background, or None. May be slow: not on the Tk thread."""
+    root = _full_path(root)              # "data" or "\\data" may be on a mapped current drive
     if is_mapped_drive(root):
         return ("Mapped drive letters do not exist in a background task. Enter the full network "
                 "path instead, for example \\\\server\\share.")
@@ -1011,7 +1012,11 @@ def check_background_folder(root):
 
 def _full_path(path):
     """A task does not start in this program's folder, so every path in it must be a full one."""
-    return path if path.startswith("\\\\") else os.path.abspath(path)
+    if path.startswith("\\\\"):
+        return path
+    if re.match(r"[A-Za-z]:[\\/]", path):
+        return ntpath.normpath(path)
+    return os.path.abspath(path)
 
 
 def _same_path(a, b):
@@ -1221,6 +1226,7 @@ def start_background_scan(root, args, report, runner=None):
     the password (/RP *), so this program never sees it. Returns the job record.
     Slow on a slow share and waits for the user: never call it on the Tk thread.
     """
+    root, report = _full_path(root), _full_path(report)   # a short path can hide a mapped drive
     if is_mapped_drive(root):
         raise BackgroundError("Mapped drive letters do not exist in a background task. Enter the "
                               "folder's full network path instead, for example \\\\server\\share.")
@@ -1228,7 +1234,6 @@ def start_background_scan(root, args, report, runner=None):
         raise BackgroundError("Mapped drive letters do not exist in a background task. Save the "
                               "report by its full network path instead, for example "
                               "\\\\server\\share\\report.html.")
-    root, report = _full_path(root), _full_path(report)
     if not os.path.isdir(os.path.dirname(report)):
         raise BackgroundError(f"The report's folder does not exist or is not reachable: {report}")
     status_file = report + ".status.json"
