@@ -3348,7 +3348,7 @@ def write_html_report(path, rows, meta, folder_basis=False, pdf=None, cancel_eve
     data["pdf"] = pdf                     # None for the interactive HTML report
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     payload = payload.replace("<", "\\u003c")   # still JSON, and nothing can end the <script>
-    title = f"Folder activity report - {meta.get('root', '')}"
+    title = f"{APP_NAME} report - {meta.get('root', '')}"
     page = REPORT_TEMPLATE.replace("__TITLE__", html_mod.escape(title)).replace("__DATA__", payload)
     _check_canceled(cancel_event)
     part = path + ".part"
@@ -3985,7 +3985,7 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><span>Folder activity report</span><span id="generated"></span></div>
+  <div class="top"><span>TreeRot report</span><span id="generated"></span></div>
   <h1 id="root-path"></h1>
   <p class="period" id="period"></p>
 
@@ -4116,9 +4116,9 @@ dl.details dd { margin: 0; overflow-wrap: anywhere; }
   document.querySelector("h1").prepend(logo);
   document.getElementById("period").textContent = "Activity period: " + D.period;
   document.getElementById("generated").textContent = "Scanned " + M.scanned_at;
-  document.getElementById("finding").textContent = total === 0
+  document.getElementById("finding").textContent = S.files === 0
     ? "No files were found in this folder."
-    : (C.red.bytes === 0
+    : (C.red.folders === 0
       ? "Every folder that holds files was used " + D.period_phrase + "."
       : pct(C.red.bytes, total) + " of the storage here (" + fmtSize(C.red.bytes) + " in " + nf(C.red.files) +
         " files) is in folders where no file was " + D.activity + " " + D.period_phrase + ".");

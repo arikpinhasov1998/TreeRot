@@ -104,3 +104,36 @@ class SurrogateNames(unittest.TestCase):
             app.write_csv(out, self._rows(d))
             with open(out, encoding="utf-8-sig", newline="") as f:
                 self.assertEqual(len(list(csv.reader(f))), 3)
+
+
+class FindingAndName(unittest.TestCase):
+    def _page(self, d, spec):
+        make_tree(d, spec)
+        rows = list(scan_rows(d, datetime(2024, 1, 1)).values())
+        out = os.path.join(d, "r.html")
+        app.write_html_report(out, rows, meta_for("<x>"))
+        with open(out, encoding="utf-8") as f:
+            return f.read(), rows
+
+    def test_the_report_carries_treerots_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            html, _ = self._page(d, {"a/f.txt": OLD})
+        self.assertIn("<title>TreeRot report - &lt;x&gt;</title>", html)
+        self.assertIn("<span>TreeRot report</span>", html)
+        self.assertNotIn("Folder activity report", html)
+
+    def test_the_finding_counts_files_and_folders_not_bytes(self):
+        # no JavaScript engine in the tests: the data is real, the condition is read from the page
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "a", "empty.txt")
+            os.makedirs(os.path.dirname(path))
+            open(path, "wb").close()
+            os.utime(path, (OLD, OLD))
+            html, rows = self._page(d, {})
+            sm = app.report_data(rows, meta_for(d))["summary"]
+        self.assertEqual(sm["total"], 0)
+        self.assertGreater(sm["files"], 0)
+        self.assertGreater(sm["colors"]["red"]["folders"], 0)
+        self.assertIn("textContent = S.files === 0\n", html)
+        self.assertIn(": (C.red.folders === 0\n", html)
+        self.assertNotIn("C.red.bytes === 0", html)
