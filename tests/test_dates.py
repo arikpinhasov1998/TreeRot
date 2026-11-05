@@ -25,3 +25,84 @@ class ToDayEnds(unittest.TestCase):
         by = {os.path.basename(r["info"].path): r for r in rows}
         self.assertEqual(by["s"]["info"].range_files, 1)
         self.assertEqual(by["s"]["status"], "Active")
+
+
+FROM = datetime(2025, 1, 1)
+TO = datetime(2025, 6, 30, 12, 0, 0)    # whole seconds survive the trip through a file's time
+LO, HI = FROM.timestamp(), TO.timestamp()
+
+
+def scanned_in_range(mtime, lo=LO, hi=HI, created="off"):
+    with tempfile.TemporaryDirectory() as d:
+        make_tree(d, {"s/f.txt": mtime})
+        folders, _ = app.scan_tree(d, excludes=None, stats={}, date_from_ts=lo, date_to_ts=hi,
+                                   created=created)
+    return next(f for p, f in folders.items() if os.path.basename(p) == "s").range_files == 1
+
+
+def listed_color(mtime, lo=LO, hi=HI, created="off"):
+    with tempfile.TemporaryDirectory() as d:
+        make_tree(d, {"f.txt": mtime})
+        rows, _ = app.list_folder_files(d, lo=lo, hi=hi, created=created, activity="modified",
+                                        period="p")
+    return rows[0]["color"]
+
+
+class Boundaries(unittest.TestCase):
+    CASES = [("a second before From", LO - 1, False), ("exactly From", LO, True),
+             ("a second after From", LO + 1, True), ("a second before To", HI - 1, True),
+             ("exactly To", HI, True), ("a second after To", HI + 1, False)]
+
+    def test_the_scan_at_each_edge(self):
+        for name, when, inside in self.CASES:
+            with self.subTest(name):
+                self.assertEqual(scanned_in_range(when), inside)
+
+    def test_the_file_list_agrees_with_the_scan(self):
+        for name, when, inside in self.CASES:
+            with self.subTest(name):
+                self.assertEqual(listed_color(when), app.GREEN if inside else app.RED)
+
+    def test_only_a_from_date_has_no_upper_edge(self):
+        self.assertTrue(scanned_in_range(HI + 86400, hi=None))
+        self.assertFalse(scanned_in_range(LO - 1, hi=None))
+
+    def test_only_a_to_date_has_no_lower_edge(self):
+        self.assertTrue(scanned_in_range(LO - 86400, lo=None))
+        self.assertFalse(scanned_in_range(HI + 1, lo=None))
+
+    def test_typed_dates_cover_the_whole_of_the_to_day_and_no_more(self):
+        lo = app.parse_date("2025-01-01").timestamp()
+        hi = app.parse_date("2025-06-30", end_of_day=True).timestamp()
+        day = datetime(2025, 6, 30)
+        for when, inside in ((day, True), (day + timedelta(hours=23, minutes=59, seconds=59), True),
+                             (day + timedelta(hours=23, minutes=59, seconds=59, milliseconds=500), True),
+                             (day + timedelta(days=1), False), (datetime(2025, 1, 1), True),
+                             (datetime(2025, 1, 1) - timedelta(seconds=1), False)):
+            with self.subTest(when=when):
+                self.assertEqual(scanned_in_range(when.timestamp(), lo, hi), inside)
+
+
+class CreatedBoundaries(unittest.TestCase):
+    """An old modified date, with the creation date on each side of the edges."""
+    OUTSIDE = LO - 86400 * 400
+
+    def test_the_created_date_has_the_same_edges(self):
+        for name, created_at, inside in Boundaries.CASES:
+            with self.subTest(name), mock.patch.object(app, "file_created",
+                                                       return_value=created_at):
+                self.assertEqual(scanned_in_range(self.OUTSIDE, created="auto"), inside)
+                self.assertEqual(listed_color(self.OUTSIDE, created="auto"),
+                                 app.GREEN if inside else app.RED)
+
+    def test_off_ignores_the_created_date(self):
+        now = datetime.now().timestamp()
+        self.assertFalse(scanned_in_range(self.OUTSIDE, lo=now - 3600, hi=None, created="off"))
+
+    def test_a_real_file_just_created_counts_where_the_system_keeps_it_apart(self):
+        # macOS moves the birth time back along with an older modified time, so only ctime on a
+        # system without a birth time can show this with a real file.
+        if hasattr(os.stat_result, "st_birthtime"):
+            self.skipTest("the birth time follows an older modified time here")
+        now = datetime.now().timestamp()
+        self.assertTrue(scanned_in_range(self.OUTSIDE, lo=now - 3600, hi=None, created="ctime"))
