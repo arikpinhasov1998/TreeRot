@@ -349,7 +349,17 @@ def _stop_helper(child, grouped=False):
                 child.terminate()
         else:
             child.terminate()
-        child.wait(2)                # reap it, so no zombie is left behind
+        try:
+            child.wait(2)            # reap it, so no zombie is left behind
+        except subprocess.TimeoutExpired:      # ignored SIGTERM: end it for certain
+            if grouped:
+                try:
+                    os.killpg(child.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+                except Exception:
+                    child.kill()
+            else:
+                child.kill()
+            child.wait(2)
     except Exception:
         pass
 

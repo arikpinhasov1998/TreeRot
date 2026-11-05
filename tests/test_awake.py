@@ -71,6 +71,29 @@ class Awake(unittest.TestCase):
                 self.assertEqual("NOSLEEP-NOTE" in err.getvalue(), expect, extra)
 
 
+class StopHelper(unittest.TestCase):
+    def test_a_child_that_ignores_terminate_is_killed(self):
+        code = ("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "print('ready', flush=True)\ntime.sleep(60)")
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
+        self.addCleanup(p.stdout.close)
+        p.stdout.readline()                   # the handler is installed
+        try:
+            app._stop_helper(p)
+            self.assertIsNotNone(p.poll(), "the child survived SIGTERM and was not killed")
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+
+    def test_kill_is_used_after_terminate_times_out(self):
+        child = mock.Mock()
+        child.wait.side_effect = [subprocess.TimeoutExpired("x", 2), 0]
+        app._stop_helper(child)
+        child.terminate.assert_called_once()
+        child.kill.assert_called_once()
+
+
 def gone(pid, wait=5):
     """True once no process has this pid (polls for up to `wait` seconds)."""
     end = time.monotonic() + wait
