@@ -964,7 +964,8 @@ FILE_IID, MORE_IID, FILEERR_IID = "file::", "more::", "fileerr::"
 # ---- background scans (Windows): a one-time scheduled task that outlives the RDP session
 JOBS_DIR = os.path.join(os.path.expanduser("~"), ".treerot", "jobs")
 TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
-TASK_PREFIX = "TreeRot\\scan-"          # every task this program creates, and only those
+TASK_PREFIX = "TreeRot-"                # every task this program creates, and only those; flat,
+                                        # as a standard user may not be able to create a task folder
 STARTING_GRACE_SECONDS = 300            # no status after this long: the task did not get going
 SCHTASKS_TIMEOUT = 60                   # seconds; schtasks answers at once when it answers at all
 JOBS_REFRESH_MS = 5000                  # how often the open panel looks at the scans again

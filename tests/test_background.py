@@ -404,6 +404,12 @@ class Jobs(JobCase):
                                       runner=self.run_ok)
         self.assertEqual(self.cmds, [])
 
+    def test_tasks_sit_in_the_root_of_task_scheduler(self):
+        # A standard user may not be allowed to create a task folder.
+        job = self.start()
+        self.assertEqual(job["task"], "TreeRot-" + job["id"])
+        self.assertNotIn("\\", job["task"])
+
     def test_two_jobs_in_the_same_second_get_their_own_task(self):
         a, b = self.start("a.html"), self.start("b.html")
         self.assertNotEqual(a["task"], b["task"])
@@ -589,8 +595,9 @@ class OnlyOurTasks(JobCase):
 
     def test_a_task_name_outside_our_own_is_never_touched(self):
         job = self.start()
-        for name in ("\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", "TreeRot\\other", "*",
-                     "TreeRot\\scan-" + job["id"] + "x", "treerot\\scan-" + job["id"], ""):
+        for name in ("\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", "TreeRot-other", "*",
+                     "TreeRot-" + job["id"] + "x", "treerot-" + job["id"], "",
+                     "\\TreeRot-" + job["id"], "TreeRot\\scan-" + job["id"]):
             bad = dict(job, task=name)
             for fn in (app.remove_job, app.end_job):
                 with self.subTest(name=name, fn=fn.__name__):
@@ -599,7 +606,7 @@ class OnlyOurTasks(JobCase):
 
     def test_a_well_formed_name_with_no_record_of_ours_is_never_touched(self):
         job = self.start()
-        other = dict(job, id="20200101-000000-abcd", task="TreeRot\\scan-20200101-000000-abcd")
+        other = dict(job, id="20200101-000000-abcd", task="TreeRot-20200101-000000-abcd")
         self.schtasks_calls(app.remove_job, other)
         self.schtasks_calls(app.end_job, other)
 
@@ -608,7 +615,7 @@ class OnlyOurTasks(JobCase):
         path = os.path.join(app.JOBS_DIR, job["id"] + ".json")
         with open(path, encoding="utf-8") as f:
             record = json.load(f)
-        record["task"] = "TreeRot\\scan-20200101-000000-abcd"
+        record["task"] = "TreeRot-20200101-000000-abcd"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(record, f)
         self.schtasks_calls(app.remove_job, job)
@@ -617,7 +624,7 @@ class OnlyOurTasks(JobCase):
         job = self.start()
         outside = os.path.join(self.d, "keep.json")
         open(outside, "w").close()
-        bad = dict(job, id=os.path.join("..", "keep"), task="TreeRot\\scan-../keep")
+        bad = dict(job, id=os.path.join("..", "keep"), task="TreeRot-../keep")
         self.schtasks_calls(app.remove_job, bad)
         self.assertTrue(os.path.exists(outside))
 
@@ -627,7 +634,7 @@ class OnlyOurTasks(JobCase):
         for name, text in (("a.json", "{half"), ("b.json", "[1]"),
                            ("c.json", json.dumps(dict(job, task="\\Microsoft\\x"))),
                            ("d.json", json.dumps(job)),        # the name does not match its id
-                           ("e.json", json.dumps({"id": "e", "task": "TreeRot\\scan-e"}))):
+                           ("e.json", json.dumps({"id": "e", "task": "TreeRot-e"}))):
             with open(os.path.join(app.JOBS_DIR, name), "w", encoding="utf-8") as f:
                 f.write(text)
         self.assertEqual([j["id"] for j in app.load_jobs()], [job["id"]])
