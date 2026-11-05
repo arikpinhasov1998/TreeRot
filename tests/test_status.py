@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -145,6 +147,107 @@ class Status(unittest.TestCase):
             with open(p, "wb") as f:
                 f.write(b"\xff\xfe\x00")
             self.assertIsNone(app.read_status(p))
+
+
+class Heartbeat(unittest.TestCase):
+    def _writer(self, d, beat=0.05):
+        patches = [mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0),
+                   mock.patch.object(app.StatusWriter, "HEARTBEAT", beat)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        path = os.path.join(d, "x.json")
+        w = app.StatusWriter(path)
+        self.addCleanup(w.finish, "failed")
+        return w, path
+
+    def wait_for(self, cond, secs=5):
+        end = time.monotonic() + secs
+        while time.monotonic() < end:
+            if cond():
+                return True
+            time.sleep(0.01)
+        return False
+
+    def test_heartbeat_keeps_updated_fresh_and_state_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d)
+            first = app.read_status(path)["updated"]
+            self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > first))
+            self.assertEqual(app.read_status(path)["state"], "running")
+
+    def test_heartbeat_repeats_the_latest_progress(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=0.05)
+            w._write("running", "42%", "c", "t")
+            u = app.read_status(path)["updated"]
+            self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > u))
+            self.assertEqual(app.read_status(path)["percent"], "42%")
+
+    def test_finish_stops_heartbeat_and_state_sticks(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d)
+            self.assertTrue(w.finish("finished"))
+            u = app.read_status(path)["updated"]
+            time.sleep(0.3)
+            s = app.read_status(path)
+            self.assertEqual((s["state"], s["updated"]), ("finished", u))
+            self.assertFalse(w._thread.is_alive())
+
+    def test_beat_after_finish_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=60)
+            w.finish("finished")
+            with mock.patch.object(w, "_write_file") as wf:
+                w._beat()
+            wf.assert_not_called()
+
+    def test_update_skips_instead_of_waiting_for_a_blocked_write(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=60)
+            gate, entered = threading.Event(), threading.Event()
+
+            def stuck(data):
+                entered.set()
+                gate.wait(10)
+                return True
+            p = {"phase": "scan", "fraction": 0.5, "exact": False, "folders": 1, "files": 2,
+                 "bytes": 3}
+            with mock.patch.object(w, "_write_file", side_effect=stuck):
+                t = threading.Thread(target=w._beat)
+                t.start()
+                self.assertTrue(entered.wait(5))
+                t0 = time.monotonic()
+                w.update(p)
+                self.assertLess(time.monotonic() - t0, 1)
+                gate.set()
+                t.join(5)
+
+    def test_finish_waits_only_a_bounded_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=60)
+            with mock.patch.object(app.StatusWriter, "LOCK_WAIT", 0.1):
+                w._lock.acquire()
+                try:
+                    t0 = time.monotonic()
+                    self.assertFalse(w.finish("finished"))
+                    self.assertLess(time.monotonic() - t0, 2)
+                finally:
+                    w._lock.release()
+
+    def test_status_is_stale(self):
+        now = 1000.0
+        stale = app.STATUS_STALE_SECONDS
+        self.assertEqual(stale, 120)
+        run = {"state": "running", "updated": now - stale - 1}
+        self.assertTrue(app.status_is_stale(run, now))
+        self.assertFalse(app.status_is_stale({"state": "running", "updated": now - 5}, now))
+        self.assertFalse(app.status_is_stale({"state": "finished", "updated": 0}, now))
+        self.assertFalse(app.status_is_stale({"state": "failed", "updated": 0}, now))
+        self.assertTrue(app.status_is_stale({"state": "running", "updated": "x"}, now))
+        self.assertTrue(app.status_is_stale({"state": "running"}, now))
+        self.assertFalse(app.status_is_stale(None, now))
+        self.assertTrue(app.status_is_stale({"state": "running", "updated": time.time() - 999}))
 
 
 if __name__ == "__main__":

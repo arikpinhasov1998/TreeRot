@@ -3709,13 +3709,22 @@ def read_exclude_file(path):
         return [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
 
 
+STATUS_STALE_SECONDS = 120      # a "running" status not refreshed for this long is dead or stuck
+
+
 class StatusWriter:
     """Keeps a small JSON file up to date, so a window can follow a scan running elsewhere.
 
     Each write goes to a temporary file that then replaces the real one, so a reader never
-    sees a half-written file. A failed write is ignored: it must never stop a scan."""
+    sees a half-written file. A failed write is ignored: it must never stop a scan.
+    A heartbeat thread rewrites the latest data every HEARTBEAT seconds, so "updated" stays
+    fresh while the report is made or the share is slow; a reader treats an old "updated"
+    on a "running" file as a dead scan (see status_is_stale). Writes are serialized by a
+    lock. The scan never waits for it: update() skips a write if another is in progress."""
 
     INTERVAL = 5
+    HEARTBEAT = 30
+    LOCK_WAIT = 10                 # longest finish() waits for a write that is stuck
     FINISH_TRIES = 8
     RETRY_DELAY = 0.25
 
@@ -3724,16 +3733,38 @@ class StatusWriter:
         self.meter = ProgressMeter()
         self.last = None
         self.error_text = ""
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._latest = ("running", "", "", "", "")
         self._write("running")
+        self._thread = threading.Thread(target=self._heartbeat, name="status-heartbeat",
+                                        daemon=True)
+        try:
+            self._thread.start()
+        except RuntimeError:
+            pass                   # no heartbeat is better than no scan
 
-    def _write(self, state, percent="", counts="", times="", error=""):
-        data = {"state": state, "percent": percent, "counts": counts, "times": times,
+    def _data(self, state, percent, counts, times, error):
+        return {"state": state, "percent": percent, "counts": counts, "times": times,
                 "updated": time.time(), "report": self.report, "error": error}
-        return self._write_file(data)
+
+    def _write(self, state, percent="", counts="", times="", error="", wait=-1):
+        """Write now. wait = seconds to wait for another write to end (-1 forever, 0 not at
+        all). True if the file was written."""
+        self._latest = (state, percent, counts, times, error)
+        return self._locked_write(self._data(*self._latest), wait)
+
+    def _locked_write(self, data, wait):
+        if not self._lock.acquire(timeout=wait):
+            return False
+        try:
+            return self._write_file(data)
+        finally:
+            self._lock.release()
 
     def _write_file(self, data):
         """One attempt to replace the status file. True if it worked."""
-        tmp = self.path + ".tmp"
+        tmp = f"{self.path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -3746,26 +3777,58 @@ class StatusWriter:
                 pass                   # a status problem must never stop the scan
             return False
 
+    def _heartbeat(self):
+        while not self._stop.wait(self.HEARTBEAT):
+            self._beat()
+
+    def _beat(self):
+        with self._lock:               # this thread may block; the scan never does
+            if self._stop.is_set():    # finish() has begun: never overwrite its state
+                return
+            self._write_file(self._data(*self._latest))
+
     def update(self, p):
         try:
             v = self.meter.update(p)
             now = time.monotonic()
             if self.last is None or now - self.last >= self.INTERVAL:
-                self.last = now
                 pct, counts, times = progress_parts(p, v, "  \u00b7  ")
-                self._write("running", pct, counts, times)
+                if self._write("running", pct, counts, times, wait=0):
+                    self.last = now    # if skipped, try again on the next report
         except Exception:
             pass                       # progress text is never worth stopping a scan for
 
     def finish(self, state, error=""):
         """Write the final state, retrying: on Windows a reader holding the file open makes
         the replace fail, and nothing would ever correct a stale "running". True if written."""
+        self._stop.set()
+        ok = False
         for i in range(self.FINISH_TRIES):
             if i:
                 time.sleep(self.RETRY_DELAY)
-            if self._write(state, "100%" if state == "finished" else "", error=error):
-                return True
+            if not self._lock.acquire(timeout=self.LOCK_WAIT):
+                break                  # a write is stuck (stalled share): give up
+            try:
+                ok = self._write_file(self._data(
+                    state, "100%" if state == "finished" else "", "", "", error))
+            finally:
+                self._lock.release()
+            if ok:
+                break
+        self._thread.join(0.5)
+        return ok
+
+
+def status_is_stale(data, now=None):
+    """True if a status dict says "running" but has not been refreshed for
+    STATUS_STALE_SECONDS: the scan is dead or its share is stuck."""
+    if not data or data.get("state") != "running":
         return False
+    try:
+        age = (time.time() if now is None else now) - float(data["updated"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    return age > STATUS_STALE_SECONDS
 
 
 def read_status(path):
