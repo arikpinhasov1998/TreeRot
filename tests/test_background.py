@@ -1028,6 +1028,15 @@ class Cleanup(JobCase):
         self.assertEqual(self.cmds, [])                  # nor does Remove
         self.assertEqual(len(app.load_jobs()), 2)
 
+    def test_tasks_that_may_be_alive_are_left_at_launch(self):
+        silent, stalled = self.start("a.html"), self.start("b.html")
+        app._save_job(dict(silent, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+        self.write_status(stalled, updated=time.time() - 3600)
+        self.assertEqual(sorted(app.job_state(j)[0] for j in app.load_jobs()), ["silent", "stalled"])
+        self.cmds = []
+        app.clean_finished_jobs(runner=self.run_ok)
+        self.assertEqual(self.cmds, [])
+
     def test_a_task_that_could_not_be_deleted_is_tried_again(self):
         job = self.start()
         self.write_status(job, state="finished", report=job["report"])

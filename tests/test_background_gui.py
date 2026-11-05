@@ -277,6 +277,56 @@ class Panel(BackgroundGui):
             self.run_case(check)
 
 
+class PanelCleansUp(BackgroundGui):
+    def test_an_open_panel_deletes_a_finished_task_and_keeps_the_entry(self):
+        job = self.start()
+        with open(job["report"], "w") as f:
+            f.write("x")
+
+        def check(w):
+            w._jobs_panel()
+
+            def running():
+                self.assertEqual(self.schtasks, [])
+                self.write_status(job, state="finished", report=job["report"])
+                self.wait(w, lambda: self.row(w, job) == "Finished", finished)
+
+            def finished():
+                self.assertEqual([c[1:4] for c in self.schtasks], [["/Delete", "/TN", job["task"]]])
+                self.assertNotIn(self.tk_thread, self.schtasks_threads)
+                self.assertTrue(app.load_jobs()[0]["task_removed"])
+                w._jobs_ui["tv"].selection_set(job["id"])
+                self.wait(w, lambda: str(w._jobs_ui["open"].cget("state")) == "normal", later)
+
+            def later():
+                w.after(400, stayed)
+
+            def stayed():
+                self.assertEqual(len(self.schtasks), 1)      # once, however many refreshes
+                self.assertEqual(self.row(w, job), "Finished")
+                self.finish()
+            self.write_status(job)
+            self.wait(w, lambda: self.row(w, job) == "Running", running)
+        self.run_case(check)
+
+    def test_an_open_panel_leaves_tasks_that_may_be_alive(self):
+        silent, stalled = self.start("a.html"), self.start("b.html")
+        app._save_job(dict(silent, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+        self.write_status(stalled, updated=time.time() - 3600)
+
+        def check(w):
+            w._jobs_panel()
+
+            def shown():
+                w.after(400, later)
+
+            def later():
+                self.assertFalse([c for c in self.schtasks if "/Delete" in c or "/End" in c])
+                self.finish()
+            self.wait(w, lambda: self.row(w, stalled) == "Stopped?" and self.row(w, silent) == "Not started", shown)
+        self.run_case(check)
+
+
 class OpenReport(BackgroundGui):
     def select_when(self, w, job, label, then):
         w._jobs_panel()
@@ -435,7 +485,7 @@ class EndAndRemove(BackgroundGui):
                     self.press(w, "end")
 
                     def ended():
-                        self.assertEqual([c[1] for c in self.schtasks], ["/End"])
+                        self.assertEqual(self.schtasks[0][1], "/End")     # then, being over, /Delete
                         self.assertNotIn(self.tk_thread, self.schtasks_threads)
                         self.finish()
                     self.wait(w, lambda: self.row(w, job) == "Ended", ended)

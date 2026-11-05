@@ -981,6 +981,7 @@ TASK_RESULT_WORDS = {
     0x80070002: "Windows could not find the program the task should run",
     0x00041306: "The task was stopped",
 }
+JOB_OVER = ("finished", "failed", "ended")      # no process left: the task is only a stored password
 CREATING_LIMIT_SECONDS = 900            # a password prompt older than this was left or abandoned
 JOB_LABELS = {"creating": "Password", "starting": "Starting", "silent": "Not started", "running": "Running",
               "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed"}
@@ -1520,23 +1521,28 @@ def remove_job(job, runner=None):
     _forget_job(record["id"])
 
 
+def drop_finished_task(job, runner=None):
+    """Deletes the scheduled task of a scan that is over, which also drops the password Windows
+    stored for it. The job record stays until the user presses Remove, so someone who logged
+    off still sees the result and can open the report. A failure leaves things as they were
+    for the next try. Only for JOB_OVER: a silent or stalled scan may be alive."""
+    try:
+        record = _own_record(job)
+        if record.get("task_removed"):
+            return
+        _delete_task(record["task"], runner or _quiet_run)
+        record["task_removed"] = True
+        if os.path.isfile(_job_path(record["id"])):     # not if Remove came first
+            _save_job(record)
+    except (BackgroundError, OSError):
+        pass
+
+
 def clean_finished_jobs(runner=None):
-    """
-    Tasks that are over are deleted on the next launch, which also drops the password Windows
-    stored for them. The job record stays until the user presses Remove, so someone who logged
-    off still sees the result and can open the report.
-    Slow work: never call it on the Tk thread.
-    """
+    """Tasks that are over are deleted on the next launch. Slow work: never on the Tk thread."""
     for job in load_jobs():
-        if job.get("task_removed") or job_state(job)[0] not in ("finished", "failed", "ended"):
-            continue
-        try:
-            _delete_task(job["task"], runner or _quiet_run)
-            job["task_removed"] = True
-            if os.path.isfile(_job_path(job["id"])):     # not if Remove came first
-                _save_job(job)
-        except (BackgroundError, OSError):
-            pass                         # still there: the next launch tries again
+        if not job.get("task_removed") and job_state(job)[0] in JOB_OVER:
+            drop_finished_task(job, runner)
 
 
 def gui_unavailable(reason):
@@ -3076,6 +3082,8 @@ def run_gui(preload=None, on_ready=None):
             def work():
                 try:
                     row = job_panel_row(job)
+                    if row[0] in JOB_OVER and not job.get("task_removed"):
+                        drop_finished_task(job)
                 except Exception as e:
                     row = ("failed", f"Could not read this scan's status: {e}", None)
                 q.put(("job_row", gen, job["id"], row))
