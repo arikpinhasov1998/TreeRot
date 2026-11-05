@@ -3346,7 +3346,7 @@ def write_html_report(path, rows, meta, folder_basis=False, pdf=None, cancel_eve
     data = report_data(rows, meta, folder_basis, cancel_event)
     data["pdf"] = pdf                     # None for the interactive HTML report
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    payload = payload.replace("</", "<\\/").replace("<!--", "<\\!--")   # safe inside <script>
+    payload = payload.replace("<", "\\u003c")   # still JSON, and nothing can end the <script>
     title = f"Folder activity report - {meta.get('root', '')}"
     page = REPORT_TEMPLATE.replace("__TITLE__", html_mod.escape(title)).replace("__DATA__", payload)
     _check_canceled(cancel_event)

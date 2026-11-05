@@ -53,3 +53,26 @@ class Pre1970(unittest.TestCase):
                                                 created="off", activity="modified", period="p")
             self.assertEqual(err, "")
             self.assertEqual([r["name"] for r in listed], ["f.txt"])
+
+
+class EmbeddedData(unittest.TestCase):
+    def _embedded(self, html):
+        m = re.search(r'id="report-data"[^>]*>(.*?)</script>', html, re.S)
+        return m.group(1)
+
+    def test_names_that_could_break_the_script_stay_valid_json(self):
+        for name in ("a<!--b", "a</script>b", "a<b"):
+            with tempfile.TemporaryDirectory() as d:
+                folder = os.path.join(d, "s")
+                make_tree(folder, {"x/f.txt": OLD})
+                rows = list(scan_rows(folder, datetime(2024, 1, 1)).values())
+                meta = dict(meta_for(folder), excludes=[name], root=name)
+                out = os.path.join(d, "r.html")
+                app.write_html_report(out, rows, meta)
+                with open(out, encoding="utf-8") as f:
+                    html = f.read()
+            raw = self._embedded(html)
+            self.assertNotIn("<", raw)
+            data = json.loads(raw)
+            self.assertEqual(data["meta"]["excludes"], [name])
+            self.assertEqual(data["meta"]["root"], name)
