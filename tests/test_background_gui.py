@@ -649,6 +649,33 @@ class RunInBackground(BackgroundGui):
                 self.wait(w, lambda: self.showerror.called, told)
             self.run_case(check)
 
+    def test_closing_during_the_password_prompt_explains_and_stays_open(self):
+        def check(w):
+            w._bg_starting = True
+            with mock.patch.object(app_messagebox(), "showinfo") as info, \
+                    mock.patch.object(w, "destroy") as gone:
+                w._on_close()
+            self.assertTrue(info.called)
+            self.assertIn("password window", info.call_args[0][1])
+            self.assertFalse(gone.called)
+            self.assertTrue(w.winfo_exists())
+            w._bg_starting = False
+            self.finish()
+        self.run_case(check)
+
+    def test_closing_is_allowed_again_once_the_prompt_is_over(self):
+        def check(w):
+            w._bg_starting = True
+            with mock.patch.object(app_messagebox(), "showerror"):
+                w._bg_started("it failed")
+            with mock.patch.object(app_messagebox(), "showinfo") as info, \
+                    mock.patch.object(w, "destroy") as gone:
+                w._on_close()
+            self.assertFalse(info.called)
+            self.assertTrue(gone.called)
+            self.finish()
+        self.run_case(check)
+
     def test_a_double_start_does_not_open_a_second_prompt(self):
         report = os.path.join(self.d, "r.html")
         release = threading.Event()

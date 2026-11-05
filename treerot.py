@@ -2003,6 +2003,12 @@ def run_gui(preload=None, on_ready=None):
             release_all_awake()
 
         def _on_close(self):
+            if self._bg_starting:
+                # A task made now would hold the password with no one left to start it.
+                messagebox.showinfo(
+                    "Background scan", "The password window for a background scan is still open. "
+                    "Finish or close that window first, then close TreeRot.")
+                return
             try:
                 self._save_settings()
                 self.destroy()
