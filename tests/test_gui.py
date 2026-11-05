@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -820,6 +822,124 @@ class ReportFailure(GuiCase):
             self.assertIn("surrogates", seen.get("err", ""))
             self.assertEqual(seen["button"], "normal")
             self.assertEqual(seen["status"], "The report was not saved.")
+
+
+class ScanFolderCheck(GuiCase):
+    """A mistyped share name can take a minute to fail: that wait must not be on the Tk thread."""
+
+    def _blocked(self, d, wait=3):
+        dead = os.path.join(d, "dead")
+        real = os.path.isdir
+        self.entered, self.release = threading.Event(), threading.Event()
+        self.addCleanup(self.release.set)
+        self.check_threads = []
+
+        def isdir(path):
+            if path == dead:
+                self.check_threads.append(threading.current_thread())
+                self.entered.set()
+                self.release.wait(wait)
+                return False
+            return real(path)
+        return dead, mock.patch.object(app.os.path, "isdir", isdir)
+
+    def test_a_blocked_check_does_not_block_the_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            dead, patch = self._blocked(d)
+            seen, errors = {}, []
+
+            def check(w):
+                def later():
+                    try:
+                        seen["ticked_while_blocked"] = self.entered.is_set() and not self.release.is_set()
+                        self.release.set()
+                    except Exception as e:
+                        errors.append(e)
+                w.path_var.set(dead)
+                t0 = time.monotonic()
+                w._start()
+                seen["start_seconds"] = time.monotonic() - t0
+                seen["status"] = w.status_var.get()
+                seen["scan_btn"] = str(w.scan_btn.cget("state"))
+                seen["rows_kept"] = len(w.rows)
+                w.after(200, later)
+
+            def shown(title, msg):
+                seen["error"] = msg
+            with patch, mock.patch.object(app_messagebox(), "showerror", side_effect=shown):
+                self.drive(d, check, lambda: "error" in seen)
+            self.assertLess(seen["start_seconds"], 1)
+            self.assertEqual(seen["status"], "Checking the folder...")
+            self.assertEqual(seen["scan_btn"], "disabled")
+            self.assertTrue(seen.get("ticked_while_blocked"))
+            self.assertIsNot(self.check_threads[0], threading.current_thread())
+            self.assertIn("not reachable", seen["error"])
+            self.assertEqual(errors, [])
+
+    def test_a_folder_that_fails_the_check_gives_the_buttons_back_and_keeps_the_results(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            dead, patch = self._blocked(d, wait=0)
+            seen = {}
+
+            def check(w):
+                before = len(w.rows)
+
+                def shown(title, msg):
+                    seen.update(scan=str(w.scan_btn.cget("state")),
+                                cancel=str(w.cancel_btn.cget("state")),
+                                report=str(w.report_btn.cget("state")),
+                                kept=len(w.rows) == before and before > 0)
+                err.side_effect = shown
+                w.path_var.set(dead)
+                w._start()
+            with patch, mock.patch.object(app_messagebox(), "showerror") as err:
+                self.drive(d, check, lambda: "scan" in seen)
+            self.assertEqual((seen["scan"], seen["cancel"], seen["report"]),
+                             ("normal", "disabled", "normal"))
+            self.assertTrue(seen["kept"])
+
+    def test_cancel_during_the_check_drops_its_late_answer(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            dead, patch = self._blocked(d)
+            seen = {}
+
+            def check(w):
+                def answered():
+                    seen["scan_btn"] = str(w.scan_btn.cget("state"))
+                    seen["done"] = True
+
+                def canceled():
+                    w._cancel()
+                    seen["after_cancel"] = str(w.scan_btn.cget("state"))
+                    self.release.set()
+                    w.after(300, answered)
+                w.path_var.set(dead)
+                w._start()
+                w.after(100, canceled)
+            with patch, mock.patch.object(app_messagebox(), "showerror") as err:
+                self.drive(d, check, lambda: seen.get("done"))
+            self.assertEqual(seen["after_cancel"], "normal")
+            self.assertEqual(seen["scan_btn"], "normal")
+            self.assertFalse(err.called)
+
+    def test_an_empty_path_and_a_bad_date_need_no_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+
+            def check(w):
+                with mock.patch.object(app_messagebox(), "showerror") as err:
+                    w.path_var.set("  ")
+                    w._start()
+                    self.assertEqual(err.call_args[0][0], "Invalid path")
+                    w.path_var.set(d)
+                    w.from_var.set("nonsense")
+                    w._start()
+                    self.assertEqual(err.call_args[0][0], "Invalid date")
+                self.assertEqual(str(w.scan_btn.cget("state")), "normal")
+            self.drive(d, check)
 
 
 def app_messagebox():

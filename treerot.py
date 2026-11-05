@@ -1621,6 +1621,8 @@ def run_gui(preload=None, on_ready=None):
             self.meter = None
             self.settings = load_settings()
             self._bg_token = 0        # the newest "Run in background" press; older checks are ignored
+            self._scan_token = 0      # a folder still being checked before a scan
+            self._scan_checking = False
             self._bg_starting = False # a task is being created (the password prompt may be open)
             self._jobs_ui = None      # the Background scans panel, while it is open
             self._jobs_gen = 0
@@ -2037,7 +2039,7 @@ def run_gui(preload=None, on_ready=None):
                                     "Wait for the report to finish, or cancel it, before scanning.")
                 return
             root = self.path_var.get().strip().strip(QUOTE)
-            if not root or not os.path.isdir(root):
+            if not root:
                 messagebox.showerror("Invalid path",
                                      "That folder does not exist or is not reachable.")
                 return
@@ -2053,6 +2055,45 @@ def run_gui(preload=None, on_ready=None):
             if d_from and d_to and d_from > d_to:
                 messagebox.showerror("Invalid period", "The From date is after the To date.")
                 return
+            # A mistyped share name can take a minute to fail: the check runs on a worker.
+            self._scan_token += 1
+            self._scan_checking = True
+            token = self._scan_token
+            self.scan_btn.config(state="disabled")
+            self.cancel_btn.config(state="normal")
+            self.export_btn.config(state="disabled")
+            self.report_btn.config(state="disabled")
+            self.status_var.set("Checking the folder...")
+            q = self.q
+
+            def work():
+                try:
+                    ok = os.path.isdir(root)
+                except Exception:
+                    ok = False
+                q.put(("scan_checked", token, root, d_from, d_to, ok))
+            threading.Thread(target=work, daemon=True).start()
+
+        def _scan_check_over(self, status):
+            self._scan_checking = False
+            self.scan_btn.config(state="normal")
+            self.cancel_btn.config(state="disabled")
+            self.export_btn.config(state="normal" if self.rows else "disabled")
+            self.report_btn.config(state="normal" if self.rows else "disabled")
+            self.status_var.set(status)
+
+        def _scan_checked(self, token, root, d_from, d_to, ok):
+            if token != self._scan_token or not self._scan_checking:
+                return
+            if not ok:
+                self._scan_check_over("The scan was not started.")
+                messagebox.showerror("Invalid path",
+                                     "That folder does not exist or is not reachable.")
+                return
+            self._scan_checking = False
+            self._begin_scan(root, d_from, d_to)
+
+        def _begin_scan(self, root, d_from, d_to):
             self.period_text = describe_period(d_from, d_to)
             lo = d_from.timestamp() if d_from else None
             hi = d_to.timestamp() if d_to else None
@@ -2129,6 +2170,9 @@ def run_gui(preload=None, on_ready=None):
             self._scan_thread.start()
 
         def _cancel(self):
+            if self._scan_checking:      # nothing has started: its late answer will be dropped
+                self._scan_check_over("The scan was canceled.")
+                return
             self.cancel_event.set()
             self.report_cancel.set()
             self.status_var.set("Canceling...")
@@ -2226,6 +2270,8 @@ def run_gui(preload=None, on_ready=None):
                 self.status_var.set("The PDF was canceled.")
             elif msg[0] == "report_done":
                 self._report_done(msg[1], msg[2])
+            elif msg[0] == "scan_checked":
+                self._scan_checked(*msg[1:])
             elif msg[0] == "bg_checked":
                 self._bg_checked(*msg[1:])
             elif msg[0] == "background":
