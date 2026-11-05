@@ -1307,7 +1307,9 @@ def _clear_the_way(status_file, job_id, runner):
     try:
         os.remove(status_file)
     except FileNotFoundError:
-        pass
+        if not os.path.isdir(os.path.dirname(status_file)):  # a dead share reads as "no such file"
+            raise BackgroundError(f"The report's folder is not reachable, so an old result there "
+                                  f"could be mistaken for this scan's: {status_file}")
     except OSError as e:
         raise BackgroundError(f"The old status file {status_file} could not be removed, so its "
                               f"result could be mistaken for this scan's. {e}")

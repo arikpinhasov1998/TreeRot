@@ -363,6 +363,40 @@ class Jobs(JobCase):
                 with open(os.path.join(app.JOBS_DIR, n), encoding="utf-8") as f:
                     self.assertNotIn("password", f.read().lower())
 
+    def test_a_share_that_died_at_the_prompt_is_refused_and_the_old_result_stays_put(self):
+        first = self.start()
+        self.write_status(first, state="finished", report=first["report"])
+        status = first["status_file"]
+        real, cmds = os.remove, []
+
+        def dead_share(path, *a, **kw):        # a dead share reads as "no such file"
+            if path == status:
+                raise FileNotFoundError(2, "No such file or directory", path)
+            return real(path, *a, **kw)
+        isdir = os.path.isdir
+        folder = os.path.dirname(first["report"])
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        checks = iter([True])                  # reachable when the scan was asked for, then not
+
+        def reachable(path):
+            return next(checks, False) if path == folder else isdir(path)
+        with mock.patch.object(app.os, "remove", dead_share), \
+                mock.patch.object(app.os.path, "isdir", reachable), \
+                self.assertRaises(app.BackgroundError) as c:
+            app.start_background_scan("\\\\srv\\s", [], first["report"], runner=runner)
+        self.assertIn("not reachable", str(c.exception))
+        self.assertFalse(any("/Run" in cmd for cmd in cmds), cmds)
+        self.assertTrue(any("/Delete" in cmd for cmd in cmds), cmds)     # the new task is taken back
+        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
+
+    def test_a_status_file_that_is_really_gone_is_no_obstacle(self):
+        job = self.start()
+        self.assertFalse(os.path.exists(job["status_file"]))
+        self.assertTrue(any("/Run" in cmd for cmd in self.cmds))
+
     def test_a_failed_create_deletes_any_task_then_forgets_it(self):
         cmds = []
 
