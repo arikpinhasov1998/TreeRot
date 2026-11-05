@@ -3845,7 +3845,7 @@ def run_cli(a, root):
     """Headless scan. Returns a process exit code."""
     if not a.status_file:
         return _run_cli(a, root)
-    status = StatusWriter(a.status_file, a.report)
+    status = StatusWriter(a.status_file, os.path.abspath(a.report) if a.report else None)
     try:
         rc = _run_cli(a, root, status)
     except BaseException as e:

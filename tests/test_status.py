@@ -138,6 +138,22 @@ class Status(unittest.TestCase):
             self.assertTrue(seen)
             self.assertTrue(all(str(os.getpid()) in os.path.basename(a) for a in seen), seen)
 
+    def test_report_path_is_stored_absolute(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(os.path.join(d, "s"), {"a/f.txt": OLD})
+            st = os.path.join(d, "x.json")
+            old = os.getcwd()
+            os.chdir(d)
+            try:
+                rc = app.main([os.path.join(d, "s"), "--format", "summary", "-q",
+                               "--report", "r.html", "--status-file", st])
+            finally:
+                os.chdir(old)
+            self.assertEqual(rc, 0)
+            rep = app.read_status(st)["report"]
+            self.assertTrue(os.path.isabs(rep))
+            self.assertTrue(os.path.exists(rep))
+
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:
             w = app.StatusWriter(os.path.join(d, "x.json"))
