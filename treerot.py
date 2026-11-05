@@ -3724,6 +3724,7 @@ class StatusWriter:
 
     INTERVAL = 5
     HEARTBEAT = 30
+    FINISH_TIMEOUT = 15            # finish() never waits longer than this in all
     LOCK_WAIT = 10                 # longest finish() waits for a write that is stuck
     FINISH_TRIES = 8
     RETRY_DELAY = 0.25
@@ -3737,6 +3738,8 @@ class StatusWriter:
         self._stop = threading.Event()
         self._latest = ("running", "", "", "", "")
         self._finished = False
+        self._finish_lock = threading.Lock()
+        self._final_thread = None
         self._write("running")
         self._thread = threading.Thread(target=self._heartbeat, name="status-heartbeat",
                                         daemon=True)
@@ -3803,28 +3806,43 @@ class StatusWriter:
 
     def finish(self, state, error=""):
         """Write the final state, retrying: on Windows a reader holding the file open makes
-        the replace fail, and nothing would ever correct a stale "running". True if written."""
-        if self._stop.is_set():
-            return self._finished     # already finished: the first result stands
-        self._stop.set()
-        if state != "finished":
-            self.report = None         # only a finished scan has a report to point at
-        ok = False
-        for i in range(self.FINISH_TRIES):
-            if i:
-                time.sleep(self.RETRY_DELAY)
-            if not self._lock.acquire(timeout=self.LOCK_WAIT):
-                break                  # a write is stuck (stalled share): give up
-            try:
-                ok = self._write_file(self._data(
-                    state, "100%" if state == "finished" else "", "", "", error))
-            finally:
-                self._lock.release()
-            if ok:
-                break
-        self._finished = ok
-        self._thread.join(0.5)
-        return ok
+        the replace fail, and nothing would ever correct a stale "running". True if written.
+        The writes run on a daemon thread and finish() waits at most FINISH_TIMEOUT for it, so
+        a stalled share can never hang the program or keep it from exiting."""
+        with self._finish_lock:            # never held during file I/O
+            if self._stop.is_set():
+                return self._finished      # already finished: the first result stands
+            self._stop.set()
+            if state != "finished":
+                self.report = None         # only a finished scan has a report to point at
+            self._final_thread = threading.Thread(
+                target=self._final_writes, args=(state, error), name="status-final",
+                daemon=True)
+        try:
+            self._final_thread.start()
+        except RuntimeError:
+            return False
+        self._final_thread.join(self.FINISH_TIMEOUT)
+        self._thread.join(0.1)
+        return self._finished
+
+    def _final_writes(self, state, error):
+        try:
+            for i in range(self.FINISH_TRIES):
+                if i:
+                    time.sleep(self.RETRY_DELAY)
+                if not self._lock.acquire(timeout=self.LOCK_WAIT):
+                    return                 # a write is stuck (stalled share): give up
+                try:
+                    ok = self._write_file(self._data(
+                        state, "100%" if state == "finished" else "", "", "", error))
+                finally:
+                    self._lock.release()
+                if ok:
+                    self._finished = True
+                    return
+        except Exception:
+            pass                           # a status problem must never stop the scan
 
 
 def status_is_stale(data, now=None):

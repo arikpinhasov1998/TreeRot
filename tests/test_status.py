@@ -337,6 +337,41 @@ class Heartbeat(unittest.TestCase):
                 finally:
                     w._lock.release()
 
+    def test_finish_cannot_hang_on_a_stalled_write(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=60)
+            gate = threading.Event()
+            with mock.patch.object(app.StatusWriter, "FINISH_TIMEOUT", 0.3), \
+                    mock.patch.object(w, "_write_file",
+                                      side_effect=lambda data: gate.wait(10) and False):
+                t0 = time.monotonic()
+                try:
+                    self.assertFalse(w.finish("finished"))
+                    self.assertLess(time.monotonic() - t0, 3)
+                    self.assertTrue(w._final_thread.is_alive())
+                    self.assertTrue(w._final_thread.daemon)
+                finally:
+                    gate.set()
+                    w._final_thread.join(5)
+            self.assertFalse(w._final_thread.is_alive())
+
+    def test_concurrent_finishes_write_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            w, path = self._writer(d, beat=60)
+            calls = []
+
+            def slow(data):
+                calls.append(data["state"])
+                time.sleep(0.2)
+                return True
+            with mock.patch.object(w, "_write_file", side_effect=slow):
+                ts = [threading.Thread(target=w.finish, args=("finished",)) for _ in range(4)]
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(5)
+            self.assertEqual(calls, ["finished"])
+
     def test_status_is_stale(self):
         now = 1000.0
         stale = app.STATUS_STALE_SECONDS
