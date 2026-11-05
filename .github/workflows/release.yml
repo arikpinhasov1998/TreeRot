@@ -11,8 +11,106 @@ permissions:
   contents: read
 
 jobs:
+  # The tests run on every system before anything is built. If one fails, nothing is built or published.
+  test:
+    name: Tests ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: windows-py3.13,   os: windows-latest, python: "3.13"}
+          - {name: windows-py3.8,    os: windows-latest, python: "3.8"}
+          - {name: linux-py3.13,     os: ubuntu-22.04,   python: "3.13"}
+          - {name: linux-py3.8,      os: ubuntu-22.04,   python: "3.8"}
+          - {name: macos-arm64-py3.13,  os: macos-15,       python: "3.13"}
+          - {name: macos-x86_64-py3.13, os: macos-15-intel, python: "3.13"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Linux - install Tk (for the window) and a virtual screen (for the window tests)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tk-dev xvfb
+
+      - name: Check that tkinter works
+        run: python -c "import tkinter; tkinter.Tcl(); print('Tk', tkinter.TkVersion)"
+
+      # Python 3.8 is also run for real above. This reads every file as Python 3.8 would,
+      # so a newer syntax is caught on every system, including those without a 3.8 runner.
+      - name: Check the code reads as Python 3.8
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast, glob
+          files = ["treerot.py"] + sorted(glob.glob("tests/*.py")) + ["tools/make_icons.py"]
+          for name in files:
+              with open(name, encoding="utf-8") as f:
+                  ast.parse(f.read(), name, feature_version=(3, 8))
+          print("Python 3.8 syntax OK:", len(files), "files")
+          PY
+
+      - name: Unit tests (Linux, with a virtual screen)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m unittest discover -s tests -v
+
+      - name: Unit tests
+        if: runner.os != 'Linux'
+        run: python -m unittest discover -s tests -v
+
+      # The unit tests use pretend browsers. This one uses the real browser on the machine
+      # (Edge on Windows, Chrome on the macOS and Linux runners) and checks the PDF it writes.
+      - name: PDF made by a real browser
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          mkdir -p pdfcheck/alpha/beta && echo hello > pdfcheck/alpha/beta/file.txt
+          python - <<'PY'
+          import os, subprocess, sys
+          import treerot
+
+          def say(text):
+              print(text)
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if path:
+                  with open(path, "a", encoding="utf-8") as f:
+                      f.write(text + "\n\n")
+
+          system = os.environ.get("RUNNER_OS", sys.platform)
+          browsers = treerot.find_browsers()
+          if not browsers:
+              text = f"NO BROWSER FOUND on {system}: the real PDF check did not run on this machine."
+              if system == "Windows":
+                  print("::error::" + text)
+                  say(text)
+                  sys.exit(1)       # Edge ships with Windows, so its absence is a problem
+              print("::warning::" + text)
+              say(text)
+              sys.exit(0)
+          print("Browsers found, in the order TreeRot tries them:", browsers)
+          out = "pdfcheck.pdf"
+          if os.path.exists(out):
+              os.remove(out)
+          r = subprocess.run([sys.executable, "treerot.py", "pdfcheck", "--format", "summary",
+                              "--progress", "none", "--report", out], timeout=420)
+          if r.returncode != 0 or not os.path.isfile(out):
+              print("::error::TreeRot did not produce the PDF (exit %s)" % r.returncode)
+              sys.exit(1)
+          with open(out, "rb") as f:
+              data = f.read()
+          if not data.startswith(b"%PDF-") or b"%%EOF" not in data[-1024:] or len(data) < 1500:
+              print("::error::The file is not a complete PDF (%d bytes)" % len(data))
+              sys.exit(1)
+          say(f"Real PDF OK on {system}: {len(data)} bytes, first browser tried: {browsers[0]}")
+          PY
+
   build:
     name: Build ${{ matrix.name }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
