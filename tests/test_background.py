@@ -498,6 +498,17 @@ class Jobs(JobCase):
         self.assertEqual(self.cmds, [])
         self.assertEqual(app.read_status(first["status_file"])["state"], "running")
 
+    def test_a_scan_with_no_status_may_be_alive_so_its_report_is_not_shared(self):
+        # It may be running and unable to write its status, and would write the same report.
+        first = self.start()
+        record = dict(first, started=time.time() - app.STARTING_GRACE_SECONDS - 1)
+        app._save_job(record)
+        self.assertEqual(app.job_state(record)[0], "silent")
+        with self.assertRaises(app.BackgroundError):
+            self.start()
+        self.assertEqual(self.cmds, [])
+        self.assertEqual(len(app.load_jobs()), 1)
+
     def test_a_new_scan_replaces_an_earlier_finished_one_with_the_same_report(self):
         first = self.start()
         self.write_status(first, state="finished", report=first["report"])

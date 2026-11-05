@@ -1229,7 +1229,7 @@ def _clear_the_way(status_file, runner):
     arguments never writes one. So the old file goes before the task exists, or nothing starts."""
     for other in load_jobs():
         if _same_path(other["status_file"], status_file):
-            if job_state(other)[0] in ("starting", "running", "stalled"):
+            if job_state(other)[0] in JOB_LIVE:
                 raise BackgroundError(
                     "Another background scan is writing this report. End it or choose another "
                     "file. Background scans shows it.")
