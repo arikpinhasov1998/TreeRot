@@ -272,7 +272,8 @@ class Pdf(unittest.TestCase):
         real_popen = app.subprocess.Popen
 
         def popen(*a, **k):
-            order.append("popen")
+            if a[0][0] != "taskkill":     # Windows ends a browser with no job through taskkill
+                order.append("popen")
             return real_popen(*a, **k)
         job = mock.Mock()
         with mock.patch.object(app, "_new_job", side_effect=lambda: order.append("job") or job), \

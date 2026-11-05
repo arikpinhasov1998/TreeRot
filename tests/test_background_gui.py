@@ -155,7 +155,9 @@ class Panel(BackgroundGui):
                 self.assertEqual(tv.set(failed["id"], "detail"), "No such share")
                 self.assertIn("seems to have stopped", tv.set(stopped["id"], "detail"))
                 self.finish()
-            self.wait(w, lambda: self.row(w, failed) == "Failed", shown)
+            # Each row is read on its own thread, so they can arrive in any order.
+            jobs = (starting, running, stopped, done, failed)
+            self.wait(w, lambda: all(self.row(w, j) not in (None, "Checking") for j in jobs), shown)
         self.run_case(check)
 
     def test_folder_names_with_odd_characters_show_as_they_are(self):

@@ -65,6 +65,7 @@ class Awake(unittest.TestCase):
             self.assertIn("sleep", note)
         self.assertEqual(app._AWAKE_CHILDREN, {})
 
+    @unittest.skipIf(os.name == "nt", "the fake helpers are shell scripts; these helpers are for macOS and Linux")
     def test_a_real_helper_that_fails_at_once_gives_the_note(self):
         with tempfile.TemporaryDirectory() as d:
             for name in ("caffeinate", "systemd-inhibit"):
