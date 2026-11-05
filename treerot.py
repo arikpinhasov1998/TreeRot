@@ -3736,6 +3736,7 @@ class StatusWriter:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._latest = ("running", "", "", "", "")
+        self._finished = False
         self._write("running")
         self._thread = threading.Thread(target=self._heartbeat, name="status-heartbeat",
                                         daemon=True)
@@ -3758,6 +3759,8 @@ class StatusWriter:
         if not self._lock.acquire(timeout=wait):
             return False
         try:
+            if self._stop.is_set() and data["state"] == "running":
+                return False           # finish() has run: never turn its state back
             return self._write_file(data)
         finally:
             self._lock.release()
@@ -3801,6 +3804,8 @@ class StatusWriter:
     def finish(self, state, error=""):
         """Write the final state, retrying: on Windows a reader holding the file open makes
         the replace fail, and nothing would ever correct a stale "running". True if written."""
+        if self._stop.is_set():
+            return self._finished     # already finished: the first result stands
         self._stop.set()
         if state != "finished":
             self.report = None         # only a finished scan has a report to point at
@@ -3817,6 +3822,7 @@ class StatusWriter:
                 self._lock.release()
             if ok:
                 break
+        self._finished = ok
         self._thread.join(0.5)
         return ok
 

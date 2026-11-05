@@ -205,6 +205,18 @@ class Status(unittest.TestCase):
             w.finish("failed", "x")
             self.assertIsNone(app.read_status(w.path)["report"])
 
+    def test_nothing_changes_after_finish(self):
+        P = {"phase": "scan", "fraction": 0.5, "exact": False, "folders": 1, "files": 2,
+             "bytes": 3}
+        with tempfile.TemporaryDirectory() as d:
+            w = app.StatusWriter(os.path.join(d, "x.json"), "/r.html")
+            self.assertTrue(w.finish("finished"))
+            before = app.read_status(w.path)
+            w.update(P)
+            self.assertFalse(w._write("running", wait=0))
+            self.assertEqual(w.finish("failed", "late"), True)
+            self.assertEqual(app.read_status(w.path), before)
+
     def test_updates_are_throttled(self):
         with tempfile.TemporaryDirectory() as d:
             w = app.StatusWriter(os.path.join(d, "x.json"))
