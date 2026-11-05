@@ -121,16 +121,90 @@ class StopHelper(unittest.TestCase):
         child.kill.assert_called_once()
 
 
+def is_zombie(pid):
+    """A process that has ended and that nothing has reaped, which os.kill(pid, 0) cannot see."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rpartition(")")[2].split()[0] == "Z"
+    except OSError:
+        pass
+    r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, universal_newlines=True)
+    return r.stdout.strip().startswith("Z")
+
+
 def gone(pid, wait=5):
-    """True once no process has this pid (polls for up to `wait` seconds)."""
+    """True once no process has this pid (polls for up to `wait` seconds). A zombie has ended, so
+    it counts as gone: where no init reaps orphans, it would stay in the table for good."""
     end = time.monotonic() + wait
     while time.monotonic() < end:
+        try:
+            os.waitpid(pid, os.WNOHANG)      # reaps it if it is this test's own child
+        except ChildProcessError:
+            pass
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return True
+        if is_zombie(pid):
+            return True
         time.sleep(0.05)
     return False
+
+
+def read_two_pids(path, wait=5):
+    """The fake helper's two pids. The file can exist while it is still empty, so this waits for
+    the content, for up to `wait` seconds."""
+    end = time.monotonic() + wait
+    while True:
+        try:
+            with open(path) as f:
+                pids = f.read().split()
+        except FileNotFoundError:
+            pids = []
+        if len(pids) == 2:
+            return int(pids[0]), int(pids[1])
+        if time.monotonic() >= end:
+            raise AssertionError(f"no pids in {path} after {wait} s: {pids}")
+        time.sleep(0.02)
+
+
+@unittest.skipIf(sys.platform == "win32", "POSIX processes")
+class TestHelpers(unittest.TestCase):
+    def test_a_zombie_child_counts_as_gone(self):
+        p = subprocess.Popen(["sleep", "0"])
+        self.addCleanup(p.wait)
+        self.assertTrue(gone(p.pid))
+
+    def test_a_zombie_that_is_not_ours_counts_as_gone(self):
+        p = subprocess.Popen(["sleep", "0"])
+        self.addCleanup(p.wait)
+        with mock.patch.object(os, "waitpid", side_effect=ChildProcessError):
+            self.assertTrue(gone(p.pid))
+
+    def test_a_live_process_is_not_gone(self):
+        p = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(p.wait)
+        self.addCleanup(p.kill)
+        self.assertFalse(gone(p.pid, wait=0.2))
+
+    def test_an_empty_pids_file_is_waited_for(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pids")
+            open(path, "w").close()
+
+            def later():
+                with open(path, "w") as f:
+                    f.write("12 34\n")
+            t = threading.Timer(0.2, later)
+            t.start()
+            self.addCleanup(t.join)
+            self.assertEqual(read_two_pids(path), (12, 34))
+
+    def test_pids_that_never_come_fail_in_bounded_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(AssertionError):
+                read_two_pids(os.path.join(d, "pids"), wait=0.1)
 
 
 @unittest.skipIf(sys.platform == "win32", "POSIX shell and process groups")
@@ -147,11 +221,7 @@ class LinuxHelper(unittest.TestCase):
             with mock.patch.dict(os.environ, env):
                 with app.keep_awake("linux") as note:
                     self.assertEqual(note, "")
-                    end = time.monotonic() + 5
-                    while not os.path.exists(pids) and time.monotonic() < end:
-                        time.sleep(0.05)
-                    with open(pids) as f:
-                        parent, child = [int(x) for x in f.read().split()]
+                    parent, child = read_two_pids(pids)
                     os.kill(child, 0)         # both alive while held
             self.assertTrue(gone(parent), "systemd-inhibit stayed alive")
             self.assertTrue(gone(child), "its child was orphaned")
