@@ -180,14 +180,18 @@ class Panel(BackgroundGui):
         release = threading.Event()
         self.addCleanup(release.set)
         threads = []
+        dead_reads = []
         real = app.read_status
 
         def read(path):
             threads.append(threading.current_thread())
             if path == dead["status_file"]:
+                dead_reads.append(path)
                 release.wait(30)
             return real(path)
-        with mock.patch.object(app, "read_status", read):
+        # No launch cleanup: where it runs, it would make a stuck read of its own.
+        with mock.patch.object(app, "read_status", read), \
+                mock.patch.object(app, "background_available", return_value=False):
             def check(w):
                 t0 = time.monotonic()
                 w._jobs_panel()
@@ -200,8 +204,7 @@ class Panel(BackgroundGui):
 
                     def after_refreshes():
                         # still one stuck read, however many refreshes went by
-                        live = {t for t in threads if t.is_alive()}
-                        self.assertLessEqual(len(live), 2)
+                        self.assertEqual(len(dead_reads), 1)
                         release.set()
                         self.wait(w, lambda: self.row(w, dead) == "Starting", self.finish)
                     self.wait(w, lambda: len(threads) >= n + 3, after_refreshes)
