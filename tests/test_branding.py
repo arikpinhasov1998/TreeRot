@@ -54,6 +54,18 @@ class Readme(unittest.TestCase):
         self.assertNotIn("are fine here", text)
         self.assertIn("Avoid `%NAME%` and `$(...)` in paths here as well", text)
 
+    def test_the_button_is_no_longer_said_to_send_awkward_names_to_the_manual_route(self):
+        text = " ".join(self._readme().split())
+        self.assertNotIn("Use the manual route for these names", text)
+        self.assertNotIn("refuses your user name or path", text)
+        self.assertIn("Use this when the button refuses your user name,", text)
+        self.assertIn("If your folder name has them, scan its parent folder instead", text)
+
+    def test_the_checklist_covers_a_report_on_a_network_path(self):
+        import re
+        item = re.search(r"(?ms)^15\. .*?(?=^16\. )", self._readme()).group(0)
+        self.assertIn("\\\\server\\share", item)
+
     def test_the_readme_does_not_say_ci_has_run(self):
         text = " ".join(self._readme().split())
         for bad in ("build runs the same tests", "GitHub runs it on", "have never been tried",

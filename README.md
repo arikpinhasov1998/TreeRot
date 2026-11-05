@@ -179,7 +179,7 @@ logged on (the Windows policy "Log on as a batch job"). TreeRot's window then po
 * **The folder or report must not contain `%NAME%` or `$(Arg0)`** (a percent sign pair around
   text, or a dollar sign followed by text in parentheses). Task Scheduler may expand these in a
   command line and silently change the path, so TreeRot refuses them. A lone `100%` or `$5` is
-  fine. Use the manual route for these names.
+  fine.
 * **Your Windows user name cannot contain `&`, `%`, `^`, `|`, `<`, `>` or `"`.** The button
   refuses it, because the user name has to pass through `cmd.exe` to Windows' password prompt.
   Use the manual route.
@@ -188,7 +188,7 @@ logged on (the Windows policy "Log on as a batch job"). TreeRot's window then po
 
 ### Set up a background scan by hand
 
-Use this when the button refuses your user name or path, when the task cannot be created, or when
+Use this when the button refuses your user name, when the task cannot be created, or when
 you prefer to see every setting. It does not need the TreeRot window. A task made this way does
 **not** appear in **Background scans**; you follow it by its report and its log.
 
@@ -305,7 +305,9 @@ developer what differed. Each step says what should happen. Use a test folder fi
 14. Follow [Set up a background scan by hand](#set-up-a-background-scan-by-hand) once. *It runs
     and writes the report.*
 15. Run a background scan with a **PDF** report. *The PDF is made even though no one is logged
-    on.* If not, note the message: it names each browser that failed.
+    on.* If not, note the message: it names each browser that failed. Then run one with the report
+    on a network path such as `\\server\share\report.pdf`. *The report and its status reach the
+    share, and **Open report** opens it.*
 16. *Only if your company signs in with Microsoft work accounts (Azure AD, now called Entra ID;
     the user name looks like `AzureAD\name`):* try **Run in background...** with such an account.
     *It works, or it shows a clear reason why not.*
