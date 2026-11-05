@@ -422,6 +422,19 @@ class EndAndRemove(BackgroundGui):
                 self.selected(w, job, "Running", then)
             self.run_case(check)
 
+    def test_during_the_password_prompt_nothing_can_be_pressed(self):
+        job = self.start()
+        app._save_job(dict(job, creating=True, started=time.time()))
+
+        def check(w):
+            def then():
+                for name in ("remove", "end", "open"):
+                    self.assertEqual(str(w._jobs_ui[name].cget("state")), "disabled", name)
+                self.finish()
+            self.selected(w, job, "Password", then)
+        self.run_case(check)
+        self.assertEqual(self.schtasks, [])
+
     def test_a_finished_scan_cannot_be_ended(self):
         job = self.start()
         self.write_status(job, state="finished", report=job["report"])

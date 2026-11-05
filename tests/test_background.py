@@ -822,6 +822,24 @@ class OnlyOurTasks(JobCase):
         self.assertIn(".html", str(c.exception))
         self.assertEqual(self.cmds, [])
 
+    def test_nothing_can_remove_a_scan_during_its_password_prompt(self):
+        # The task may appear a moment later, holding a stored password, with no record.
+        job = self.start()
+        record = dict(job, creating=True, started=time.time())
+        app._save_job(record)
+        self.schtasks_calls(app.remove_job, record)
+        self.schtasks_calls(app.end_job, record)
+        self.assertEqual(len(app.load_jobs()), 1)
+
+    def test_a_prompt_left_behind_can_be_removed(self):
+        job = self.start()
+        record = dict(job, creating=True, started=time.time() - app.CREATING_LIMIT_SECONDS - 1)
+        app._save_job(record)
+        self.cmds = []
+        app.remove_job(record, runner=self.run_ok)
+        self.assertIn("/Delete", self.cmds[0])
+        self.assertEqual(app.load_jobs(), [])
+
     def test_end_asks_for_exactly_this_task_and_records_it(self):
         job = self.start()
         self.cmds = []

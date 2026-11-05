@@ -1238,6 +1238,9 @@ def _own_record(job):
         except (OSError, ValueError):
             record = None
         if isinstance(record, dict) and _names_our_task(record) and record["task"] == job["task"]:
+            if _still_creating(record):
+                raise BackgroundError("This scan is waiting for your password in its console "
+                                      "window. Finish or close that window first.")
             return record
     raise BackgroundError("This is not a task TreeRot has a record of, so it was left alone.")
 
@@ -3056,7 +3059,7 @@ def run_gui(preload=None, on_ready=None):
                 ui[name].config(state="normal" if on else "disabled")
             enable("open", idle and bool(ui["reports"].get(iid)))
             enable("end", idle and live)
-            enable("remove", idle)
+            enable("remove", idle and ui["states"].get(iid) != "creating")
             ui["detail"].config(text=ui["tv"].set(iid, "detail") if job else "")
 
         def _jobs_work(self, ui, fn, after=None):
