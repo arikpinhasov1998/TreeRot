@@ -939,6 +939,7 @@ class ScanFolderCheck(GuiCase):
                     w.from_var.set("nonsense")
                     w._start()
                     self.assertEqual(err.call_args[0][0], "Invalid date")
+                    self.assertEqual(err.call_args[0][1], app.DATE_FORMAT_MSG)
                 self.assertEqual(str(w.scan_btn.cget("state")), "normal")
             self.drive(d, check)
 
@@ -1136,6 +1137,7 @@ class OutOfRangeDate(GuiCase):
                 with mock.patch.object(app_messagebox(), "showerror") as err:
                     w._start()
                 seen["title"] = err.call_args[0][0] if err.called else None
+                seen["message"] = err.call_args[0][1] if err.called else None
                 seen["buttons"] = [str(b.cget("state")) for b in
                                    (w.scan_btn, w.cancel_btn, w.export_btn, w.report_btn)]
                 seen["status_kept"] = w.status_var.get() == status
@@ -1151,6 +1153,7 @@ class OutOfRangeDate(GuiCase):
                 w.after(50, again)
             self.drive(d, check, lambda: "rescanned" in seen)
             self.assertEqual(seen["title"], "Invalid date")
+            self.assertEqual(seen["message"], app.DATE_RANGE_MSG)
             self.assertEqual(seen["buttons"], ["normal", "disabled", "normal", "normal"])
             self.assertTrue(seen["status_kept"])
             self.assertTrue(seen["rows_kept"])

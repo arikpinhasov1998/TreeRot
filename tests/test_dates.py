@@ -142,18 +142,35 @@ class ShellDates(unittest.TestCase):
     def test_a_from_date_before_any_time_is_a_clear_error(self):
         rc, err, status = self._run("--from", "0001-01-01")
         self.assertEqual(rc, 2)
-        self.assertIn("out of range", err)
+        self.assertIn(app.DATE_RANGE_MSG, err)
         self.assertNotIn("Traceback", err)
         self.assertEqual(status["state"], "failed")
-        self.assertIn("out of range", status["error"])
+        self.assertIn(app.DATE_RANGE_MSG, status["error"])
 
     def test_a_date_windows_refuses_is_a_clear_error(self):
         with mock.patch.object(app, "period_bounds", side_effect=ValueError("x")):
             rc, err, _ = self._run("--from", "1900-01-01")
         self.assertEqual(rc, 2)
-        self.assertIn("out of range", err)
+        self.assertIn(app.DATE_RANGE_MSG, err)
 
     def test_years_too_far_back_is_a_clear_error(self):
         rc, err, _ = self._run("--years", "5000")
         self.assertEqual(rc, 2)
-        self.assertIn("out of range", err)
+        self.assertIn(app.DATE_RANGE_MSG, err)
+
+
+class Messages(unittest.TestCase):
+    def test_a_bad_format_and_a_bad_range_say_different_things(self):
+        self.assertIn("YYYY-MM-DD", app.DATE_FORMAT_MSG)
+        self.assertNotIn("YYYY-MM-DD", app.DATE_RANGE_MSG)
+        self.assertIn("outside the range", app.DATE_RANGE_MSG)
+
+    def test_read_period(self):
+        d_from, d_to, lo, hi = app.read_period("2025-01-01", "")
+        self.assertEqual((d_from, d_to, lo, hi), (FROM, None, LO, None))
+        with self.assertRaises(ValueError) as c:
+            app.read_period("nonsense", "")
+        self.assertEqual(str(c.exception), app.DATE_FORMAT_MSG)
+        with self.assertRaises(ValueError) as c:
+            app.read_period("0001-01-01", "")
+        self.assertEqual(str(c.exception), app.DATE_RANGE_MSG)

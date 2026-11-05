@@ -613,6 +613,23 @@ def period_bounds(d_from, d_to):
         raise ValueError(str(e))
 
 
+DATE_FORMAT_MSG = "Use the format YYYY-MM-DD, e.g. 2024-10-28."
+DATE_RANGE_MSG = "This date is outside the range this computer can use."
+
+
+def read_period(text_from, text_to):
+    """The typed dates as (d_from, d_to, lo, hi). Raises ValueError with the message to show."""
+    try:
+        d_from, d_to = parse_date(text_from), parse_date(text_to, end_of_day=True)
+    except ValueError:
+        raise ValueError(DATE_FORMAT_MSG)
+    try:
+        lo, hi = period_bounds(d_from, d_to)
+    except ValueError:
+        raise ValueError(DATE_RANGE_MSG)
+    return d_from, d_to, lo, hi
+
+
 def describe_period(d_from, d_to):
     if d_from and d_to:
         return f"{d_from:%Y-%m-%d} to {d_to:%Y-%m-%d}"
@@ -1392,12 +1409,24 @@ def _take_back(job, run, why):
                                "Remove it under Background scans.")
 
 
+def _refuse_bad_dates(args):
+    """No route reaches the password prompt with a date the task could only fail on. An exclusion
+    is always one --exclude=VALUE argument, so an exact "--from" here is the option."""
+    def value(option):
+        return args[args.index(option) + 1] if option in args[:-1] else ""
+    try:
+        read_period(value("--from"), value("--to"))
+    except ValueError as e:
+        raise BackgroundError(str(e))
+
+
 def start_background_scan(root, args, report, runner=None):
     """
     Creates and starts a Windows scheduled task for the scan. Windows' console prompt collects
     the password (/RP *), so this program never sees it. Returns the job record.
     Slow on a slow share and waits for the user: never call it on the Tk thread.
     """
+    _refuse_bad_dates(args)
     root, report = _full_path(root), _full_path(report)   # a short path can hide a mapped drive
     if is_mapped_drive(root):
         raise BackgroundError("Mapped drive letters do not exist in a background task. Enter the "
@@ -2111,11 +2140,9 @@ def run_gui(preload=None, on_ready=None):
                                      "That folder does not exist or is not reachable.")
                 return
             try:
-                d_from = parse_date(self.from_var.get())
-                d_to = parse_date(self.to_var.get(), end_of_day=True)
-                lo, hi = period_bounds(d_from, d_to)
-            except ValueError:
-                messagebox.showerror("Invalid date", "Use the format YYYY-MM-DD, e.g. 2024-10-28.")
+                d_from, d_to, lo, hi = read_period(self.from_var.get(), self.to_var.get())
+            except ValueError as e:
+                messagebox.showerror("Invalid date", str(e))
                 return
             if d_from is None and d_to is None:
                 messagebox.showerror("Missing period", "Enter at least a From date.")
@@ -3065,11 +3092,10 @@ def run_gui(preload=None, on_ready=None):
                 messagebox.showerror("Invalid path", "Enter the folder or share to scan.")
                 return
             text_from, text_to = self.from_var.get().strip(), self.to_var.get().strip()
-            try:
-                d_from = parse_date(text_from)
-                d_to = parse_date(text_to, end_of_day=True)
-            except ValueError:
-                messagebox.showerror("Invalid date", "Use the format YYYY-MM-DD, e.g. 2024-10-28.")
+            try:                     # before the password prompt: the task could only fail
+                d_from, d_to, _, _ = read_period(text_from, text_to)
+            except ValueError as e:
+                messagebox.showerror("Invalid date", str(e))
                 return
             if d_from is None and d_to is None:
                 messagebox.showerror("Missing period", "Enter at least a From date.")
@@ -5021,8 +5047,8 @@ def _run_cli(a, root, status=None):
         if not (a.date_from or a.date_to):
             d_from, d_to = datetime.now() - timedelta(days=365.25 * (a.years or 2.0)), None
         lo, hi = period_bounds(d_from, d_to)
-    except (ValueError, OverflowError) as e:
-        text = f"Error: the date is out of range for this computer ({e})."
+    except (ValueError, OverflowError):
+        text = f"Error: {DATE_RANGE_MSG}"
         sys.stderr.write(text + "\n")
         if status:
             status.error_text = text

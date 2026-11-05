@@ -397,6 +397,40 @@ class Jobs(JobCase):
         self.assertFalse(os.path.exists(job["status_file"]))
         self.assertTrue(any("/Run" in cmd for cmd in self.cmds))
 
+    def test_a_date_that_cannot_be_used_never_reaches_the_prompt(self):
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        for args, message in ((["--from", "0001-01-01"], app.DATE_RANGE_MSG),
+                              (["--from", "2024-01-01", "--to", "0001-01-01"], app.DATE_RANGE_MSG),
+                              (["--from", "nonsense"], app.DATE_FORMAT_MSG)):
+            with self.subTest(args=args), self.assertRaises(app.BackgroundError) as c:
+                app.start_background_scan("\\\\srv\\s", args, os.path.join(self.d, "r.html"),
+                                          runner=runner)
+            self.assertEqual(str(c.exception), message)
+        self.assertEqual(cmds, [])
+        self.assertEqual(app.load_jobs(), [])
+
+    def test_a_date_windows_refuses_never_reaches_the_prompt(self):
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        with mock.patch.object(app, "period_bounds", side_effect=ValueError("x")), \
+                self.assertRaises(app.BackgroundError):
+            app.start_background_scan("\\\\srv\\s", ["--from", "1900-01-01"],
+                                      os.path.join(self.d, "r.html"), runner=runner)
+        self.assertEqual(cmds, [])
+
+    def test_an_exclusion_named_like_a_date_option_is_not_read_as_a_date(self):
+        job = app.start_background_scan(
+            "\\\\srv\\s", app.background_args("2024-01-01", "", ["--from", "--to"]),
+            os.path.join(self.d, "r.html"), runner=self.run_ok)
+        self.assertTrue(job["id"])
+
     def test_a_failed_create_deletes_any_task_then_forgets_it(self):
         cmds = []
 

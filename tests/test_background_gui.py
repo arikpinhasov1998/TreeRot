@@ -538,6 +538,24 @@ class RunInBackground(BackgroundGui):
         checker.assert_not_called()
         self.assertEqual(self.showerror.call_count, 4)
 
+    def test_an_impossible_date_is_refused_before_anything_starts(self):
+        with mock.patch.object(app, "check_background_folder") as checker, \
+                mock.patch.object(filedialog(), "asksaveasfilename") as save, \
+                mock.patch.object(app, "start_background_scan") as start:
+            def check(w):
+                w.path_var.set(self.d)
+                w.from_var.set("0001-01-01")
+                w._run_background()
+                self.assertEqual(self.showerror.call_args[0], ("Invalid date", app.DATE_RANGE_MSG))
+                w.from_var.set("nonsense")
+                w._run_background()
+                self.assertEqual(self.showerror.call_args[0], ("Invalid date", app.DATE_FORMAT_MSG))
+                w.after(200, self.finish)
+            self.run_case(check)
+        checker.assert_not_called()
+        save.assert_not_called()
+        start.assert_not_called()
+
     def test_mapped_drive_is_refused_and_no_save_dialog_opens(self):
         with mock.patch.object(app, "is_mapped_drive", return_value=True), \
                 mock.patch.object(filedialog(), "asksaveasfilename") as ask, \
