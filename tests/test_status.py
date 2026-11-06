@@ -252,13 +252,17 @@ class Status(unittest.TestCase):
 
 
 class Heartbeat(unittest.TestCase):
-    def _writer(self, d, beat=0.05):
+    def _writer(self, beat=0.05):
+        # Cleanups run last-added first, so the writer stops before its folder is deleted.
+        # A heartbeat writing during the deletion would make it fail.
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
         patches = [mock.patch.object(app.StatusWriter, "RETRY_DELAY", 0),
                    mock.patch.object(app.StatusWriter, "HEARTBEAT", beat)]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        path = os.path.join(d, "x.json")
+        path = os.path.join(folder.name, "x.json")
         w = app.StatusWriter(path)
         self.addCleanup(w.finish, "failed")
         return w, path
@@ -272,105 +276,97 @@ class Heartbeat(unittest.TestCase):
         return False
 
     def test_heartbeat_keeps_updated_fresh_and_state_running(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d)
-            first = app.read_status(path)["updated"]
-            self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > first))
-            self.assertEqual(app.read_status(path)["state"], "running")
+        w, path = self._writer()
+        first = app.read_status(path)["updated"]
+        self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > first))
+        self.assertEqual(app.read_status(path)["state"], "running")
 
     def test_heartbeat_repeats_the_latest_progress(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=0.05)
-            w._write("running", "42%", "c", "t")
-            u = app.read_status(path)["updated"]
-            self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > u))
-            self.assertEqual(app.read_status(path)["percent"], "42%")
+        w, path = self._writer(beat=0.05)
+        w._write("running", "42%", "c", "t")
+        u = app.read_status(path)["updated"]
+        self.assertTrue(self.wait_for(lambda: app.read_status(path)["updated"] > u))
+        self.assertEqual(app.read_status(path)["percent"], "42%")
 
     def test_finish_stops_heartbeat_and_state_sticks(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d)
-            self.assertTrue(w.finish("finished"))
-            u = app.read_status(path)["updated"]
-            time.sleep(0.3)
-            s = app.read_status(path)
-            self.assertEqual((s["state"], s["updated"]), ("finished", u))
-            self.assertFalse(w._thread.is_alive())
+        w, path = self._writer()
+        self.assertTrue(w.finish("finished"))
+        u = app.read_status(path)["updated"]
+        time.sleep(0.3)
+        s = app.read_status(path)
+        self.assertEqual((s["state"], s["updated"]), ("finished", u))
+        self.assertFalse(w._thread.is_alive())
 
     def test_beat_after_finish_writes_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=60)
-            w.finish("finished")
-            with mock.patch.object(w, "_write_file") as wf:
-                w._beat()
-            wf.assert_not_called()
+        w, path = self._writer(beat=60)
+        w.finish("finished")
+        with mock.patch.object(w, "_write_file") as wf:
+            w._beat()
+        wf.assert_not_called()
 
     def test_update_skips_instead_of_waiting_for_a_blocked_write(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=60)
-            gate, entered = threading.Event(), threading.Event()
+        w, path = self._writer(beat=60)
+        gate, entered = threading.Event(), threading.Event()
 
-            def stuck(data):
-                entered.set()
-                gate.wait(10)
-                return True
-            p = {"phase": "scan", "fraction": 0.5, "exact": False, "folders": 1, "files": 2,
-                 "bytes": 3}
-            with mock.patch.object(w, "_write_file", side_effect=stuck):
-                t = threading.Thread(target=w._beat)
-                t.start()
-                self.assertTrue(entered.wait(5))
-                t0 = time.monotonic()
-                w.update(p)
-                self.assertLess(time.monotonic() - t0, 1)
-                gate.set()
-                t.join(5)
+        def stuck(data):
+            entered.set()
+            gate.wait(10)
+            return True
+        p = {"phase": "scan", "fraction": 0.5, "exact": False, "folders": 1, "files": 2,
+             "bytes": 3}
+        with mock.patch.object(w, "_write_file", side_effect=stuck):
+            t = threading.Thread(target=w._beat)
+            t.start()
+            self.assertTrue(entered.wait(5))
+            t0 = time.monotonic()
+            w.update(p)
+            self.assertLess(time.monotonic() - t0, 1)
+            gate.set()
+            t.join(5)
 
     def test_finish_waits_only_a_bounded_time(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=60)
-            with mock.patch.object(app.StatusWriter, "LOCK_WAIT", 0.1):
-                w._lock.acquire()
-                try:
-                    t0 = time.monotonic()
-                    self.assertFalse(w.finish("finished"))
-                    self.assertLess(time.monotonic() - t0, 2)
-                finally:
-                    w._lock.release()
+        w, path = self._writer(beat=60)
+        with mock.patch.object(app.StatusWriter, "LOCK_WAIT", 0.1):
+            w._lock.acquire()
+            try:
+                t0 = time.monotonic()
+                self.assertFalse(w.finish("finished"))
+                self.assertLess(time.monotonic() - t0, 2)
+            finally:
+                w._lock.release()
 
     def test_finish_cannot_hang_on_a_stalled_write(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=60)
-            gate = threading.Event()
-            with mock.patch.object(app.StatusWriter, "FINISH_TIMEOUT", 0.3), \
-                    mock.patch.object(w, "_write_file",
-                                      side_effect=lambda data: gate.wait(10) and False):
-                t0 = time.monotonic()
-                try:
-                    self.assertFalse(w.finish("finished"))
-                    self.assertLess(time.monotonic() - t0, 3)
-                    self.assertTrue(w._final_thread.is_alive())
-                    self.assertTrue(w._final_thread.daemon)
-                finally:
-                    gate.set()
-                    w._final_thread.join(5)
-            self.assertFalse(w._final_thread.is_alive())
+        w, path = self._writer(beat=60)
+        gate = threading.Event()
+        with mock.patch.object(app.StatusWriter, "FINISH_TIMEOUT", 0.3), \
+                mock.patch.object(w, "_write_file",
+                                  side_effect=lambda data: gate.wait(10) and False):
+            t0 = time.monotonic()
+            try:
+                self.assertFalse(w.finish("finished"))
+                self.assertLess(time.monotonic() - t0, 3)
+                self.assertTrue(w._final_thread.is_alive())
+                self.assertTrue(w._final_thread.daemon)
+            finally:
+                gate.set()
+                w._final_thread.join(5)
+        self.assertFalse(w._final_thread.is_alive())
 
     def test_concurrent_finishes_write_once(self):
-        with tempfile.TemporaryDirectory() as d:
-            w, path = self._writer(d, beat=60)
-            calls = []
+        w, path = self._writer(beat=60)
+        calls = []
 
-            def slow(data):
-                calls.append(data["state"])
-                time.sleep(0.2)
-                return True
-            with mock.patch.object(w, "_write_file", side_effect=slow):
-                ts = [threading.Thread(target=w.finish, args=("finished",)) for _ in range(4)]
-                for t in ts:
-                    t.start()
-                for t in ts:
-                    t.join(5)
-            self.assertEqual(calls, ["finished"])
+        def slow(data):
+            calls.append(data["state"])
+            time.sleep(0.2)
+            return True
+        with mock.patch.object(w, "_write_file", side_effect=slow):
+            ts = [threading.Thread(target=w.finish, args=("finished",)) for _ in range(4)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(5)
+        self.assertEqual(calls, ["finished"])
 
     def test_status_is_stale(self):
         now = 1000.0
