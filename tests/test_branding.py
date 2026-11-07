@@ -17,11 +17,19 @@ class Branding(unittest.TestCase):
         self.assertIn("Created by Arik Pinhasov", out)
         self.assertIn("github.com/arikpinhasov1998", out)
 
-    def test_license_is_all_rights_reserved(self):
+    def test_license_is_mit(self):
         with open(os.path.join(ROOT, "LICENSE"), encoding="utf-8") as f:
             text = f.read()
-        self.assertIn("All rights reserved", text)
-        self.assertIn("Arik Pinhasov", text)
+        self.assertTrue(text.startswith("MIT License"))
+        self.assertIn("Copyright (c) 2026 Arik Pinhasov", text)
+        self.assertIn("Permission is hereby granted, free of charge", text)
+        self.assertNotIn("All rights reserved", text)
+
+    def test_readme_names_the_mit_license(self):
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+            text = " ".join(f.read().split())
+        self.assertIn("MIT License", text)
+        self.assertNotIn("All rights reserved", text)
 
     def test_report_data_carries_logo(self):
         self.assertTrue(app.ICON_PNG_B64.startswith("iVBOR"))

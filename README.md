@@ -6,9 +6,8 @@
 folder as **green** (used in the dates you choose), **red** (not used) or **gray** (empty or
 unreadable).
 
-Created by [Arik Pinhasov](https://github.com/arikpinhasov1998). All rights reserved; see
-[LICENSE](LICENSE). GitHub's terms let others view and fork this public repository, but no other
-rights are granted.
+Created by [Arik Pinhasov](https://github.com/arikpinhasov1998). TreeRot is open source under the
+[MIT License](LICENSE): you may use, change and share it, as long as the copyright notice stays.
 
 A folder counts as used when a file anywhere inside it was **modified or created** in the period,
 even if the folder's own date is older. Hover over a folder to see *why* it has its color;
