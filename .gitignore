@@ -11,3 +11,25 @@ treerot_report_*.html
 treerot_report_*.pdf
 .superpowers/
 .DS_Store
+
+# Python caches and tools
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Operating system clutter
+Thumbs.db
+desktop.ini
+
+# Claude Code's personal settings (shared settings.json stays tracked)
+.claude/settings.local.json
