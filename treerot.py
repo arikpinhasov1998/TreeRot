@@ -206,14 +206,51 @@ def remember_totals(settings, key, folders, files):
     settings["last_totals"] = hist
 
 
+# Linux/Unix filesystems that hold no real files, only the kernel's view of the system. Their
+# "files" report made-up sizes (/proc/kcore alone claims 128 TB) and reading them can hang.
+VIRTUAL_FS_TYPES = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "debugfs", "tracefs",
+    "securityfs", "pstore", "bpf", "efivarfs", "configfs", "fusectl", "mqueue", "hugetlbfs",
+    "binfmt_misc", "autofs", "nsfs", "rpc_pipefs", "selinuxfs"})
+MOUNTINFO_FILE = "/proc/self/mountinfo"
+
+
+def _unescape_mount(s):
+    """The mount table writes space, tab, newline and backslash as octal (\\040 etc.)."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def virtual_mounts(mountinfo=None):
+    """Mount points of virtual filesystems (see VIRTUAL_FS_TYPES); empty where there is no
+    /proc mount table (Windows, macOS) or it cannot be read."""
+    out = set()
+    try:
+        with open(mountinfo or MOUNTINFO_FILE, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return out
+    for line in lines:
+        left, sep, right = line.partition(" - ")
+        fields, rest = left.split(), right.split()
+        if sep and len(fields) >= 5 and rest and rest[0] in VIRTUAL_FS_TYPES:
+            out.add(os.path.normpath(_unescape_mount(fields[4])))
+    return out
+
+
 def make_excluder(root, excludes):
     """
     Return is_excluded(path, name). Each exclude entry may be:
       * absolute path / UNC path  -> that folder and everything below it
       * relative path (has / or \\) -> matched against the path relative to the scan root
       * plain name or wildcard    -> matched against every folder's own name
+    Virtual filesystems such as /proc and /sys are always skipped, unless the scan starts
+    inside one (then the user asked for it).
     """
     abs_set, rel_pats, name_pats = set(), [], []
+    root_real = os.path.normpath(root)
+    for m in virtual_mounts():
+        if not (root_real == m or root_real.startswith(m.rstrip("/") + "/")):
+            abs_set.add(os.path.normcase(m))
     for raw in excludes or []:
         p = raw.strip().strip(QUOTE)
         if not p:
