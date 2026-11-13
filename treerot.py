@@ -1714,8 +1714,6 @@ def run_gui(preload=None, on_ready=None):
                 self.iconphoto(True, tk.PhotoImage(data=ICON_PNG_B64))
             except tk.TclError:
                 pass
-            self.geometry("1250x720")
-            self.minsize(950, 480)
 
             self.rows = []
             self.by_path = {}
@@ -1758,6 +1756,7 @@ def run_gui(preload=None, on_ready=None):
             self._jobs_gen = 0
 
             self._build_ui()
+            self._fit_main_window()
             self.path_var.set(self.settings.get("path", ""))
             self._quick_period("Last 2 years")
             for ex in self.settings.get("excludes", []):
@@ -2022,8 +2021,6 @@ def run_gui(preload=None, on_ready=None):
             win = tk.Toplevel(self)
             win.title("Pick a date")
             win.transient(self)
-            win.resizable(False, False)
-            win.geometry(f"+{self.winfo_rootx() + 120}+{self.winfo_rooty() + 60}")
             head = ttk.Frame(win)
             head.pack(fill="x", padx=6, pady=(6, 2))
             title = ttk.Label(head, anchor="center", width=16)
@@ -2041,6 +2038,7 @@ def run_gui(preload=None, on_ready=None):
                         if d:
                             ttk.Button(body, text=str(d), width=4,
                                        command=lambda d=d: choose(d)).grid(row=r, column=c)
+                self._refit(win)               # a month can need 6 week rows instead of 5
 
             def shift(dm):
                 m = st["m"] - 1 + dm
@@ -2063,6 +2061,7 @@ def run_gui(preload=None, on_ready=None):
                        ).pack(side="left")
             ttk.Button(foot, text="Cancel", command=win.destroy).pack(side="right")
             draw()
+            self._fit_dialog(win, 120, 60)
 
         # ---- exclusions
         def _ex_add(self, value):
@@ -2955,7 +2954,6 @@ def run_gui(preload=None, on_ready=None):
             win = tk.Toplevel(self)
             win.title("Export report")
             win.transient(self)
-            win.resizable(False, False)
             frm = ttk.Frame(win, padding=16)
             frm.pack(fill="both", expand=True)
             browser = find_browser()
@@ -3032,6 +3030,7 @@ def run_gui(preload=None, on_ready=None):
                 if pages > 300:
                     t += " That is a very large PDF; the HTML report is easier to use for this."
                 est_var.set(t)
+                self._refit(win)
             for var in (fmt, tree_mode, levels):
                 var.trace_add("write", sync)
             sync()
@@ -3045,9 +3044,50 @@ def run_gui(preload=None, on_ready=None):
             ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
             ttk.Button(btns, text="Save...", command=go).pack(side="right", padx=(0, 6))
             win.bind("<Escape>", lambda e: win.destroy())
-            win.update_idletasks()
-            win.geometry(f"+{self.winfo_rootx() + 160}+{self.winfo_rooty() + 120}")
+            self._fit_dialog(win, 160, 120)
             self._grab_when_viewable(win)
+
+        def _fit_main_window(self):
+            """Opens the window big enough for every control plus room for the results, from
+            what the widgets ask for: a fixed pixel size hides the results tree completely
+            on a high-resolution screen or with large desktop fonts."""
+            self.update_idletasks()
+            sw, sh = self._screen_box(self)
+            need_w, need_h = self.winfo_reqwidth(), self.winfo_reqheight()
+            tree_h = self.tree.master.winfo_reqheight()    # scrolls, so it may give some back
+            self.geometry(f"{min(sw, max(1250, need_w))}x{min(sh, max(720, need_h + tree_h))}")
+            self.minsize(min(sw, need_w), min(sh, max(480, need_h - tree_h // 2)))
+
+        def _screen_box(self, win):
+            """Usable screen size, leaving room for panels and the title bar."""
+            return max(320, win.winfo_screenwidth() - 40), max(240, win.winfo_screenheight() - 80)
+
+        def _refit(self, win):
+            """Lets a dialog be at least as big as its content needs (capped at the screen), and
+            grows it when the content got bigger. Call again after the content changes."""
+            try:
+                if not win.winfo_exists():
+                    return
+                win.update_idletasks()
+                sw, sh = self._screen_box(win)
+                need_w, need_h = min(win.winfo_reqwidth(), sw), min(win.winfo_reqheight(), sh)
+                win.minsize(need_w, need_h)
+                cur_w, cur_h = win.winfo_width(), win.winfo_height()
+                if win.winfo_ismapped() and (cur_w < need_w or cur_h < need_h):
+                    win.geometry(f"{max(cur_w, need_w)}x{max(cur_h, need_h)}")
+            except tk.TclError:
+                pass
+
+        def _fit_dialog(self, win, dx, dy):
+            """Sizes a dialog to its content, keeps it resizable and on screen. Fixed-size
+            dialogs cut off their buttons when the content grows or the fonts are larger."""
+            win.resizable(True, True)
+            self._refit(win)
+            sw, sh = self._screen_box(win)
+            w, h = min(win.winfo_reqwidth(), sw), min(win.winfo_reqheight(), sh)
+            x = min(max(0, self.winfo_rootx() + dx), max(0, sw - w))
+            y = min(max(0, self.winfo_rooty() + dy), max(0, sh - h))
+            win.geometry(f"+{x}+{y}")
 
         def _grab_when_viewable(self, win, tries=None):
             """Makes a dialog modal. Linux refuses the grab until the window is on screen, so this
@@ -3199,7 +3239,9 @@ def run_gui(preload=None, on_ready=None):
                 return
             win = tk.Toplevel(self)
             win.title("Background scans")
-            win.geometry("900x340")
+            sw, sh = self._screen_box(win)
+            win.geometry(f"{min(900, sw)}x{min(340, sh)}")
+            win.minsize(min(500, sw), min(220, sh))
             frame = ttk.Frame(win)
             frame.pack(fill="both", expand=True, padx=8, pady=8)
             tv = ttk.Treeview(frame, columns=("state", "detail"), selectmode="browse", height=8)
@@ -3447,7 +3489,6 @@ def run_gui(preload=None, on_ready=None):
             win = tk.Toplevel(self)
             win.title(f"About {APP_NAME}")
             win.transient(self)
-            win.resizable(False, False)
             frm = ttk.Frame(win, padding=20)
             frm.pack(fill="both", expand=True)
             win.logo = self._logo(win)           # kept here: Tk drops an image nothing refers to
@@ -3467,8 +3508,7 @@ def run_gui(preload=None, on_ready=None):
             ttk.Button(btns, text="Open link", command=open_link).pack(side="left", padx=(0, 6))
             ttk.Button(btns, text="Close", command=win.destroy).pack(side="left")
             win.bind("<Escape>", lambda e: win.destroy())
-            win.update_idletasks()
-            win.geometry(f"+{self.winfo_rootx() + 160}+{self.winfo_rooty() + 120}")
+            self._fit_dialog(win, 160, 120)
             self._grab_when_viewable(win)
 
         def _export(self):

@@ -1309,3 +1309,57 @@ class DialogGrab(GuiCase):
 def app_messagebox():
     from tkinter import messagebox
     return messagebox
+
+
+class DialogsFitTheirContent(GuiCase):
+    """Fixed-size dialogs cut off their buttons when the content grows (picking PDF adds the
+    page estimate) or the desktop uses bigger fonts."""
+
+    def test_export_dialog_grows_when_pdf_is_picked(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/b/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                with mock.patch.object(app, "find_browser", return_value="/usr/bin/chromium"):
+                    w._export_report()
+                win = [c for c in w.winfo_children() if c.winfo_class() == "Toplevel"][-1]
+                seen["resizable"] = tuple(bool(x) for x in win.resizable())
+                html_h = win.winfo_reqheight()
+
+                def find(widget, prefix):
+                    for c in widget.winfo_children():
+                        try:
+                            if str(c.cget("text")).startswith(prefix):
+                                return c
+                        except Exception:
+                            pass
+                        hit = find(c, prefix)
+                        if hit is not None:
+                            return hit
+                find(win, "PDF").invoke()
+                win.update_idletasks()
+                seen["grew"] = win.winfo_reqheight() > html_h
+                seen["min_covers_content"] = (win.minsize()[0] >= min(win.winfo_reqwidth(), win.winfo_screenwidth() - 40)
+                                              and win.minsize()[1] >= min(win.winfo_reqheight(), win.winfo_screenheight() - 80))
+                seen["has_save"] = find(win, "Save") is not None
+                win.destroy()
+            self.drive(d, check)
+            self.assertEqual(seen["resizable"], (True, True))
+            self.assertTrue(seen["grew"])
+            self.assertTrue(seen["min_covers_content"])
+            self.assertTrue(seen["has_save"])
+
+    def test_main_window_leaves_room_for_the_results(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+            seen = {}
+
+            def check(w):
+                w.update()
+                seen["tree_h"] = w.tree.winfo_height()
+                seen["min_w"] = w.minsize()[0]
+                seen["need_w"] = min(w.winfo_reqwidth(), w.winfo_screenwidth() - 40)
+            self.drive(d, check)
+            self.assertGreater(seen["tree_h"], 100)
+            self.assertGreaterEqual(seen["min_w"], seen["need_w"])
