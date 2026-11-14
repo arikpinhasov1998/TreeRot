@@ -1340,14 +1340,17 @@ class DialogsFitTheirContent(GuiCase):
                             return hit
                 find(win, "PDF").invoke()
                 win.update_idletasks()
-                seen["grew"] = win.winfo_reqheight() > html_h
+                # The PDF estimate may add a line (with large fonts): never lose room.
+                seen["not_smaller"] = win.winfo_reqheight() >= html_h
+                seen["pdf_options_on"] = find(win, "All levels").instate(["!disabled"])
                 seen["min_covers_content"] = (win.minsize()[0] >= min(win.winfo_reqwidth(), win.winfo_screenwidth() - 40)
                                               and win.minsize()[1] >= min(win.winfo_reqheight(), win.winfo_screenheight() - 80))
                 seen["has_save"] = find(win, "Save") is not None
                 win.destroy()
             self.drive(d, check)
             self.assertEqual(seen["resizable"], (True, True))
-            self.assertTrue(seen["grew"])
+            self.assertTrue(seen["not_smaller"])
+            self.assertTrue(seen["pdf_options_on"])
             self.assertTrue(seen["min_covers_content"])
             self.assertTrue(seen["has_save"])
 
