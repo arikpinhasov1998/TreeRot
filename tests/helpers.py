@@ -32,6 +32,7 @@ REAL_NOTIFY = app.notify
 app.notify = lambda title, body, platform=None, run=None: False
 # A window opened by a test puts no icon in the real tray and leaves no start-up item.
 app.TRAY_ALLOWED = False
+app.x11_activate = lambda window: False      # never pull real windows forward in tests
 # A window opened by a test does not ask the computer for its light or dark setting.
 REAL_SYSTEM_PREFERS_DARK = app.system_prefers_dark
 app.system_prefers_dark = lambda platform=None, run=None, env=None: False

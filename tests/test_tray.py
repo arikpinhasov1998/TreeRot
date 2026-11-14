@@ -147,6 +147,88 @@ class TrayChoice(unittest.TestCase):
         self.assertFalse(run.call_args.kwargs["hidden"])
 
 
+class X11Icon(unittest.TestCase):
+    """The Linux tray icon: shown once the tray holds it, and clicks sent to it are read."""
+
+    def tray(self, parent=77, events=()):
+        import ctypes
+        t = app.X11Tray.__new__(app.X11Tray)
+        t.wid, t.shown, t.size, t.win = 5, False, None, None
+        t.opened, t.menus, t.fits = [], [], []
+        t.on_open = lambda: t.opened.append(True)
+        t.on_menu = lambda x, y: t.menus.append((x, y))
+        t._fit = lambda w, h: t.fits.append((w, h))
+        queue = list(events)
+
+        class X:
+            def XPending(self, d):
+                return len(queue)
+
+            def XNextEvent(self, d, ref):
+                event = queue.pop(0)                   # kept alive while it is copied
+                ctypes.memmove(ctypes.addressof(ref._obj), ctypes.addressof(event),
+                               ctypes.sizeof(ref._obj))
+
+        class Root:
+            def after(self, ms, fn, *args):
+                if ms == 0:
+                    fn(*args)
+                return "job"
+
+            def winfo_pointerxy(self):
+                return (300, 20)
+        t.x, t.display, t.root = X(), object(), Root()
+        patch = mock.patch.object(app, "_x_parent", lambda x, d, w: parent)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return t
+
+    def event(self, kind, window=5, button=0, x_root=0, y_root=0, width=0, height=0):
+        e = app._x_input_event()()
+        e.type = kind
+        if kind == 5:
+            e.button.window, e.button.button = window, button
+            e.button.x_root, e.button.y_root = x_root, y_root
+        else:
+            e.configure.window, e.configure.width, e.configure.height = window, width, height
+        return e
+
+    def test_held_by_the_tray(self):
+        t = self.tray(parent=77)
+        t._show_in_tray(3)
+        self.assertTrue(t.shown)
+        self.assertEqual(t.opened, [])
+
+    def test_a_tray_that_never_takes_it_in_opens_the_window_instead(self):
+        t = self.tray(parent=0)
+        t.root.after = lambda ms, fn, *a: fn(*a)
+        t._show_in_tray(3)
+        self.assertFalse(t.shown)
+        self.assertEqual(t.opened, [True])
+
+    def test_a_left_click_opens_treerot(self):
+        t = self.tray(events=[self.event(5, button=1)])
+        t._pump()
+        self.assertEqual(t.opened, [True])
+        self.assertEqual(t.menus, [])
+
+    def test_a_right_click_opens_the_menu_where_the_icon_is(self):
+        t = self.tray(events=[self.event(5, button=3, x_root=1260, y_root=8),
+                              self.event(5, button=3)])
+        t._pump()
+        self.assertEqual(t.menus, [(1260, 8), (300, 20)])   # no position given: the pointer's
+
+    def test_clicks_for_other_windows_are_ignored(self):
+        t = self.tray(events=[self.event(5, window=9, button=1)])
+        t._pump()
+        self.assertEqual(t.opened, [])
+
+    def test_the_tray_sets_the_size(self):
+        t = self.tray(events=[self.event(22, width=16, height=16)])
+        t._pump()
+        self.assertEqual(t.fits, [(16, 16)])
+
+
 class FakeTray:
     def __init__(self, *a, **k):
         self.closed = False
@@ -172,6 +254,18 @@ class Window(GuiCase):
         patch = mock.patch.object(app, "notify", lambda *a, **k: False)
         patch.start()
         self.addCleanup(patch.stop)
+
+    def test_an_icon_the_tray_never_showed_means_closing_quits(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"f.txt": OLD})
+            quits = []
+
+            def check(w):
+                self.trays[0].shown = False
+                with mock.patch.object(w, "_on_close", lambda: quits.append(True)):
+                    w._close_window()
+                self.assertEqual(quits, [True])
+            self.drive(d, check)
 
     def test_closing_hides_in_the_tray_and_the_icon_opens_it_again(self):
         with tempfile.TemporaryDirectory() as d:

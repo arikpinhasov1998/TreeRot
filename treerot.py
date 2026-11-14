@@ -134,6 +134,14 @@ CREDIT = "Created by Arik Pinhasov"
 CREDIT_URL = "https://github.com/arikpinhasov1998"
 ICON_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAADAUlEQVR42u2bv2sUQRTH5w+5v8DGYHVcGWwsLNfCKhAEsRJyYmMdq8NCsAhioaIQJEiKSOwUOSVY+gPBBDlBJSAo2I/7XXLLMuyPmb33Yza3Bw+OC2Hv+7l5896bN8+Yhte/v7+GqU1Sm6ZmO2LTk+88NG1f6T8nqc06JLrKoCEJET5IbfsUCHcNmgY+4menUHxxNQyWVXw9BI1lv37pQmYa7lC24Yl+ib2dx3Z0ZpAZ3itASIoARJf+0c/Pdnx3IwfwbHzN/jn8IO4KxTgv9uB3R2/t+adX7LmbqzmAh6MV+yW5aH8fvJKGMDQnCYPIA++/f2LPPkgycwF8Wh1l9uPRliSAiZHK8K7vb+bi6wDAvt0ai2WMRkN8EwBJCEZDvA8AKQhGQ7wvAAkIbAA2X9+rFB8CAPb9zu1uAdj9+KJWfCgA2PHeTjcAIMlBnKcGgDyBI1kykn6/CACu/cBQZ3k+4tsCgFFni6QALj+/wQ7g69W1OAGE/PqLAKBeBUba90MAoC7AxgdDKOTYC8gAhIj3AVAW9gBk/veoAPjE/RAACHlVz6LOC4zG8l+kGqR2AxIAPolPqAuUPQd7gc8qEQcQKr5tOYzPmiCJAwgNfyFRADEfuz8MvzhHODQaG+CieQDlRtgD6AF0EAD2BthSAoiuGMIBiCQA6r5BtHlA3ckQwh9VRWikzwF8AcwFIvtzEyBKVzASJ8ChANxTYMDgOimOshp0/bxYA0RZDbYpiJrK4eIJsOsCVIUQKYBQN2jaAyASwuHrnI0SQ9kPkEqEKPsD/alw3xfoO0P0vUEuAJ3oDbp3gagAcN0dYrsf0OQKIQA4L0mwAWhqk/sC4GqLi1yRqYsKvgC47w6yX5KqqhN8AHDdChEFUAWhTW+wswDKINQBkBIvCsCFUAVAUvwcwFQDQhkAafHzq7IT4YdmEFwACuLzy9JDhQfHMDBh87E6jVmhCADM+pEZzaEpZQDb6mNzigDimB08ePMyB4D36uI1RmchXFB88+hsPzy9hOPz/wGvgFbabsQh1AAAAABJRU5ErkJggg=='
 ICON_LARGE_PNG_B64 = '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'   # 256 px: taskbar, dock, notifications
+# Small sizes drawn for the Linux tray, which shows the icon at one fixed size (16 px and up).
+ICON_TRAY_PNG_B64 = {
+    16: 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA3UlEQVR42mNgAIIvH1/0AvEjIP5PJAap7WVA0oxV4akju8AYj0G9DLhs3nR1+3+jcqf/i6wM/r/atg6nSxhwadafFwo34JqTFU5DMAy49/z6f5flqRgG3Az1/f/h7hXCBsw5swysGdmABzUl/58tngXGBA0o2NmG1QCQ7SCaoAEw56N7AeYNslwA0gjCb08dJGxA26FpGAY87m//fycjAUwTFQu4vEBULCC7AtkAbLbjNAAWFsixgEsdA75MVDK5+P+akiy8mQpvZtq2bgkY481M+LLz/VsXwRhfdgYAN3lM9vHW0OoAAAAASUVORK5CYII=',
+    22: 'iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAABHElEQVR42mNgAIIvH1/IAHEvED8C4v9k4kdQM2QYkAwlaOD9WxfBmEgLZBigthDU0DWn+f/69lpiXd/LQMi1955f/1+ws+2/UbnT/0VWBv8f1JT8/3D3CkFXMxCy3WV56n/9eaFwg685Wf2/GepL0NV4DQa5FGQousEgDHI5WQafuHccbig2g0H47amDpBsctaEUp8HPFs8C4zsZCaQbjGwousEwNfjCGqvBm65ux2swyKUgDGK/2raOegYjY5IMRo84XAbjMpSiMIYFBckGI6dhbKkCFHH40jL90zHNch6sAMJVVhAqiAgWQjDDYQYTYyjM4EfEGO7REPR/qa8zUYbCik2iCvpt65aAMSkFPVFVEwkGP0Kv96hamQIAxrpMAeLFHAEAAAAASUVORK5CYII=',
+    24: 'iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAABK0lEQVR42mNggIIvH18UAvExIP5PIQaZUciADIACq6hgMDpehexyojQtWDr5/6bZE0ixpJCB2GBpOzTtv1G50/9FVgb/H/e3Ex1cDMQoLNjZ9l9/XijcgmtOVv8f1JQQZQkDsYajW0CsJXgt2HR1O9xwbBaA8Ktt68i3wGV5KkELbob6kmcBuuvRLXi2eBZYHSiY8PmCAV+qwWfB21MHwepAKQpfqmIgJnKxWQAKGpDrCUU22RYgY5paQCipUhQHoIgGscmKgxP3jhNMRbA4gEU4yfkgakMpwSC6k5FAfkZD9wU2C/C5fuDLIvSgQraAUNCQZMG959fB5RLMAlAm+3D3CtEWEF0Pl0wu/r+mJIuk+pmkKnPbuiVgTFKVSUqlT6IFq9BbFjRptgAAKN9rOAgKp0UAAAAASUVORK5CYII=',
+    32: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABfklEQVR42mNgQAJfPr6wAOJVQPyfRhhktgUDNkBjizEcQhXLTx3ZBcYUOQIa7GQZkpTs/78kwoeSkLAgy/f3nl//H7Wh9L9ZgP7/PCO1/3cyEv5/uHuFvFAgx3KX5an/9eeFwh1wzcnq/81QX7IcwUCu5egOINcRDORajs0B5DiCaAcU7GxDsRyXA0D4QU0JdR1w4t5xDMvxOQCE3546SD0HgFI8MQ4ABT/I9yAalDOo4gBQ3GOzHJsDYHEPopH5FDlg09XtRDsAWR+I/2rbOsodgC3x4XIAKPhBloJoYhMjVR1ATm4Yvg4gJv6JcsCcM8uIdsCzxbPg8Q/KhsSUBQzkFkLoDkAOblIKI6IKIvQ6gJgQABVGVCsJcUUDvjQAcgxVKyNsoYDLAcT6niQHYCsRcTmA2BxAcoMEPUticwApVfHQahENijYhuiNgDiDXcpgDVpHrCFi/gFzLYc1ysjsmFTkJYExRx4SSrhmFDqC8f7ht3RIwptjygeyeAwA+5hx2F2/3NQAAAABJRU5ErkJggg==',
+    48: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACQklEQVR42u2aO0vEQBDH54PsJ7ARLK8SsdXuGisbwdID7azPKthZiNgI2olYKJZaRBFLHwh6CIKKICjYx0y4DWEvGzc7M3mggWnujtz/l8wrMwHIOb6/3lRsvdjC2KKaLRxqUeByxD8MGiDaZkGRcNWQK+5yR1QeQBvEpxCVuM3s5ERiou40dB32P7gYnEedMZXYx+WpFISCYYSznrh/thGNb3dTgNupTvS8viYB0GP1/cHrXbR00k/EmwBoT6vL0efjNW8scIqf3ltIxecBoN13Z1ghQEq8DYAbggVg7mBlRHwRANrD4nwzALI+XwZAx0StAIc3x1bxLgBo70f79QHk+X1ZAIyHWgB0rqcCUGuEN8Bv4ssAoFUKsHW16w2ALpNtLTCQ8fOXnc3qAGxp0wUgTyglrYKU+9gA8rIOxY3Ap8ukAJhXGt1Jf+fTtQJ37ncJYoTAO4HuRK0JIBXAZbOQbyADZ+tABfBpLUCigPkAoHifglZLDHC4zt8FwIcXCgC6CqZLMwOh+TzkgEQXWgSQFanbCEpXClKdqA0gW6ywHlA7UvCd+VCaORSbFe9bhUnttEtD5xrElOdjbwCXitzILFTmLrgAUKcTQJ1/UgGoc1PgmoP6AHDMS1kGW7a6UARAnUb8jxZd4sEGwLkvAM55vdnouT4TNwbAhDABuMVrAPblHroTxoQGMGdB3AuOnsCJk8DWAMxbmZEVkxI6eQoguG5VomtWYYBAfNEtCBBW8qqB0KI7LHzxo7Uve7T1dZsfZWF7gtQgnekAAAAASUVORK5CYII=',
+}
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".treerot.json")
 OLD_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
@@ -2489,7 +2497,63 @@ def _x11():
                                   ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
                                   ctypes.c_int]
     x.XFlush.argtypes = [ctypes.c_void_p]
+    x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p] * 4
+    x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x.XDefaultRootWindow.restype = ctypes.c_ulong
+    x.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                      ctypes.c_int, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                                      ctypes.c_ulong, ctypes.c_ulong]
+    x.XCreateSimpleWindow.restype = ctypes.c_ulong
+    x.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+    x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x.XPending.argtypes = [ctypes.c_void_p]
+    x.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    x.XFree.argtypes = [ctypes.c_void_p]
     return x
+
+
+def _x_parent(x, display, window):
+    """The X window that holds `window` (0 if it cannot be found)."""
+    import ctypes
+    root, parent, kids, n = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_void_p(), ctypes.c_uint()
+    if not x.XQueryTree(display, window, ctypes.byref(root), ctypes.byref(parent),
+                        ctypes.byref(kids), ctypes.byref(n)):
+        return 0
+    if kids.value:
+        x.XFree(kids)
+    return 0 if parent.value == root.value else parent.value
+
+
+def x11_activate(window):
+    """Asks the desktop to bring a Tk window to the front, minimized or not (the freedesktop
+    _NET_ACTIVE_WINDOW request). False when there is no X display to ask."""
+    import ctypes
+    try:
+        x = _x11()
+        d = x.XOpenDisplay(None) if x and os.environ.get("DISPLAY") else None
+    except OSError:
+        return False
+    if not d:
+        return False
+    try:
+        wrapper = _x_parent(x, d, window.winfo_id()) or window.winfo_id()
+        XEvent = _XClientMessage.build()
+        ev = XEvent()
+        ev.xclient.type = 33                                    # ClientMessage
+        ev.xclient.window = wrapper
+        ev.xclient.message_type = x.XInternAtom(d, b"_NET_ACTIVE_WINDOW", 0)
+        ev.xclient.format = 32
+        for i, v in enumerate((2, 0, 0, 0, 0)):               # asked for by the user
+            ev.xclient.l[i] = v
+        x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                 ctypes.c_long, ctypes.POINTER(XEvent)]
+        x.XSendEvent(d, x.XDefaultRootWindow(d), 0, (1 << 19) | (1 << 20), ctypes.byref(ev))
+        x.XFlush(d)
+        return True
+    except Exception:
+        return False
+    finally:
+        x.XCloseDisplay(d)
 
 
 class _XClientMessage:
@@ -2508,10 +2572,49 @@ class _XClientMessage:
         return XEvent
 
 
+_X_INPUT_EVENT = []
+
+
+def _x_input_event():
+    """The Xlib event layout for the two events the tray icon reads (made once, on first use:
+    ctypes is loaded only when a tray is wanted)."""
+    if _X_INPUT_EVENT:
+        return _X_INPUT_EVENT[0]
+    import ctypes
+    head = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+            ("display", ctypes.c_void_p)]
+
+    class Button(ctypes.Structure):
+        _fields_ = head + [("window", ctypes.c_ulong), ("root", ctypes.c_ulong),
+                           ("subwindow", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                           ("x", ctypes.c_int), ("y", ctypes.c_int),
+                           ("x_root", ctypes.c_int), ("y_root", ctypes.c_int),
+                           ("state", ctypes.c_uint), ("button", ctypes.c_uint),
+                           ("same_screen", ctypes.c_int)]
+
+    class Configure(ctypes.Structure):
+        _fields_ = head + [("event", ctypes.c_ulong), ("window", ctypes.c_ulong),
+                           ("x", ctypes.c_int), ("y", ctypes.c_int),
+                           ("width", ctypes.c_int), ("height", ctypes.c_int),
+                           ("border_width", ctypes.c_int), ("above", ctypes.c_ulong),
+                           ("override_redirect", ctypes.c_int)]
+
+    class XEvent(ctypes.Union):
+        _fields_ = [("type", ctypes.c_int), ("button", Button), ("configure", Configure),
+                    ("pad", ctypes.c_long * 24)]
+    _X_INPUT_EVENT.append(XEvent)
+    return XEvent
+
+
 class X11Tray:
     """A tray icon for Linux desktops with a system tray (the freedesktop "XEmbed" tray: GNOME
-    with the AppIndicator extension, as on Ubuntu, KDE, Xfce, Cinnamon, MATE...). The icon is a
-    small Tk window that the tray takes in."""
+    with the AppIndicator extension, as on Ubuntu, KDE, Xfce, Cinnamon, MATE...).
+
+    The tray takes in a small window that TreeRot makes itself, and Tk draws the logo inside
+    it. The window is TreeRot's own (not one of Tk's) because a tray sends its clicks straight
+    to that window, and Tk would drop clicks sent to a window it did not make for a widget."""
+
+    POLL_MS = 50
 
     def __init__(self, root, image, background, on_open, on_menu):
         self.root, self.on_open, self.on_menu = root, on_open, on_menu
@@ -2523,13 +2626,18 @@ class X11Tray:
         self.selection = self.x.XInternAtom(self.display,
                                             f"_NET_SYSTEM_TRAY_S{screen}".encode(), 0)
         self.owner = 0
-        self.win = None
+        self.wid = 0
+        self.win = self.label = None
+        self.shown = False
+        self.size = None
         self.image, self.background = image, background
-        self._job = None
+        self.images = {}
+        self._job = self._pump_job = None
         if not self._dock():
             self.close()
             raise OSError("no system tray")
         self._job = root.after(5000, self._watch)
+        self._pump_job = root.after(self.POLL_MS, self._pump)
 
     @staticmethod
     def available(platform=None):
@@ -2547,53 +2655,113 @@ class X11Tray:
         finally:
             x.XCloseDisplay(d)
 
-    def _dock(self):
-        import ctypes
+    def _drop_window(self):
         import tkinter as tk
-        self.owner = self.x.XGetSelectionOwner(self.display, self.selection)
-        if not self.owner:
-            return False
         if self.win is not None:
             try:
                 self.win.destroy()
             except tk.TclError:
                 pass
-        win = tk.Toplevel(self.root)
-        win.withdraw()
-        label = tk.Label(win, image=self.image, bd=0, highlightthickness=0,
-                         bg=self.background)
-        label.pack(fill="both", expand=True)
-        label.bind("<ButtonRelease-1>", lambda e: self.on_open())
-        for button in ("<ButtonRelease-3>", "<ButtonRelease-2>"):
-            label.bind(button, lambda e: self.on_menu(e.x_root, e.y_root))
-        win.update_idletasks()
-        wid = int(win.wm_frame(), 16)
-        info_atom = self.x.XInternAtom(self.display, b"_XEMBED_INFO", 0)
+            self.win = self.label = None
+        if self.wid and self.display:
+            self.x.XDestroyWindow(self.display, self.wid)
+            self.x.XFlush(self.display)
+        self.wid = 0
+
+    def _dock(self):
+        import ctypes
+        import tkinter as tk
+        x, d = self.x, self.display
+        self.owner = x.XGetSelectionOwner(d, self.selection)
+        if not self.owner:
+            return False
+        self._drop_window()
+        self.shown = False
+        self.size = None
+        wid = x.XCreateSimpleWindow(d, x.XDefaultRootWindow(d), 0, 0, 22, 22, 0, 0, 0)
+        if not wid:
+            return False
+        x.XSelectInput(d, wid, 1 << 17)                 # StructureNotify: size changes
+        info_atom = x.XInternAtom(d, b"_XEMBED_INFO", 0)
         info = (ctypes.c_long * 2)(0, 1)               # XEmbed version 0, mapped
-        self.x.XChangeProperty(self.display, wid, info_atom, info_atom, 32, 0, info, 2)
+        x.XChangeProperty(d, wid, info_atom, info_atom, 32, 0, info, 2)
+        x.XFlush(d)
+        self.wid = wid
+        win = tk.Toplevel(self.root, use=hex(wid), bg=self.background, bd=0,
+                          highlightthickness=0, width=22, height=22)
+        label = tk.Label(win, image=self.image, bd=0, highlightthickness=0, bg=self.background)
+        label.place(relx=0.5, rely=0.5, anchor="center")
+        self.win, self.label = win, label
+        win.update_idletasks()
         XEvent = _XClientMessage.build()
         ev = XEvent()
         ev.xclient.type = 33                            # ClientMessage
         ev.xclient.window = self.owner
-        ev.xclient.message_type = self.x.XInternAtom(self.display, b"_NET_SYSTEM_TRAY_OPCODE",
-                                                     0)
+        ev.xclient.message_type = x.XInternAtom(d, b"_NET_SYSTEM_TRAY_OPCODE", 0)
         ev.xclient.format = 32
         for i, v in enumerate((0, 0, wid, 0, 0)):      # time, REQUEST_DOCK, window
             ev.xclient.l[i] = v
-        self.x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
-                                      ctypes.c_long, ctypes.POINTER(XEvent)]
-        self.x.XSendEvent(self.display, self.owner, 0, 0, ctypes.byref(ev))
-        self.x.XFlush(self.display)
-        self.win, self.label = win, label
-        # The tray has taken the window in by now: let Tk draw it there.
-        self.root.after(400, self._show_in_tray)
+        x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                 ctypes.c_long, ctypes.POINTER(XEvent)]
+        x.XSendEvent(d, self.owner, 0, 0, ctypes.byref(ev))
+        x.XFlush(d)
+        self.root.after(200, self._show_in_tray, 15)
         return True
 
-    def _show_in_tray(self):
+    def _show_in_tray(self, tries):
+        """A tray that never takes the icon in must not leave TreeRot hidden for good: then
+        TreeRot keeps its window open and closing it quits, as without a tray."""
+        if not self.wid:
+            return
+        if _x_parent(self.x, self.display, self.wid):
+            self.shown = True
+        elif tries > 1:
+            self.root.after(200, self._show_in_tray, tries - 1)
+        else:
+            self.on_open()
+
+    def _pump(self):
+        """Reads what the tray sends to the icon window: clicks and size changes."""
+        import ctypes
         import tkinter as tk
+        self._pump_job = self.root.after(self.POLL_MS, self._pump)
+        x, d = self.x, self.display
+        if not d:
+            return
+        while x.XPending(d):
+            ev = _x_input_event()()
+            x.XNextEvent(d, ctypes.byref(ev))
+            kind = ev.type
+            if kind == 5 and ev.button.window == self.wid:          # ButtonRelease
+                b = ev.button
+                if b.button == 1:
+                    self.root.after(0, self.on_open)
+                elif b.button in (2, 3):
+                    px, py = b.x_root, b.y_root
+                    if px <= 0 and py <= 0:
+                        try:
+                            px, py = self.root.winfo_pointerxy()
+                        except tk.TclError:
+                            pass
+                    self.root.after(0, lambda px=px, py=py: self.on_menu(px, py))
+            elif kind == 22 and ev.configure.window == self.wid:    # ConfigureNotify
+                self._fit(ev.configure.width, ev.configure.height)
+
+    def _fit(self, width, height):
+        """The tray picks the icon's size: show the logo drawn for that size, whole."""
+        import tkinter as tk
+        size = min(width, height)
+        if size < 2 or self.win is None:
+            return
         try:
-            if self.win is not None:
-                self.win.deiconify()
+            self.win.configure(width=width, height=height)
+            best = max((z for z in ICON_TRAY_PNG_B64 if z <= size), default=16)
+            if self.size == best:
+                return
+            if best not in self.images:
+                self.images[best] = tk.PhotoImage(master=self.root, data=ICON_TRAY_PNG_B64[best])
+            self.label.configure(image=self.images[best])
+            self.size = best
         except tk.TclError:
             pass
 
@@ -2606,25 +2774,24 @@ class X11Tray:
     def set_background(self, color):
         import tkinter as tk
         self.background = color
-        try:
-            self.label.configure(bg=color)
-        except (tk.TclError, AttributeError):
-            pass
+        for w in (self.win, self.label):
+            try:
+                if w is not None:
+                    w.configure(bg=color)
+            except tk.TclError:
+                pass
 
     def close(self):
         import tkinter as tk
-        if self._job is not None:
-            try:
-                self.root.after_cancel(self._job)
-            except tk.TclError:
-                pass
-            self._job = None
-        if self.win is not None:
-            try:
-                self.win.destroy()
-            except tk.TclError:
-                pass
-            self.win = None
+        for name in ("_job", "_pump_job"):
+            job = getattr(self, name, None)
+            if job is not None:
+                try:
+                    self.root.after_cancel(job)
+                except tk.TclError:
+                    pass
+                setattr(self, name, None)
+        self._drop_window()
         if self.display:
             self.x.XCloseDisplay(self.display)
             self.display = None
@@ -3361,7 +3528,7 @@ def run_gui(preload=None, on_ready=None, hidden=False):
         def _close_window(self):
             """With a tray icon, closing the window only hides it: scans keep running and
             the icon opens it again. Without one, closing quits as before."""
-            if self.tray is None:
+            if self.tray is None or not getattr(self.tray, "shown", True):
                 self._on_close()
                 return
             self._save_settings()
@@ -3378,6 +3545,8 @@ def run_gui(preload=None, on_ready=None, hidden=False):
             try:
                 if self.state() in ("withdrawn", "iconic"):
                     self.deiconify()
+                if sys.platform.startswith("linux"):
+                    x11_activate(self)     # a minimized window too: Tk alone cannot bring it back
                 self.lift()
                 self.focus_force()
             except tk.TclError:
