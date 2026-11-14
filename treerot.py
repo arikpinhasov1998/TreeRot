@@ -65,7 +65,7 @@ from datetime import datetime, timedelta
 
 
 QUOTE = chr(34)                       # the double-quote character, used to trim pasted paths
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 GREEN, RED, GRAY = "green", "red", "gray"
 COLOR_LABEL = {GREEN: "USED in the period", RED: "NOT used in the period",
                GRAY: "EMPTY / ERROR"}

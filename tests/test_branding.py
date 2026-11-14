@@ -13,7 +13,7 @@ class Branding(unittest.TestCase):
     def test_version_shows_name_and_credit(self):
         out = subprocess.run([sys.executable, os.path.join(ROOT, "treerot.py"), "--version"],
                              capture_output=True, text=True).stdout
-        self.assertIn("TreeRot 1.2.0", out)
+        self.assertIn("TreeRot 1.3.0", out)
         self.assertIn("Created by Arik Pinhasov", out)
         self.assertIn("github.com/arikpinhasov1998", out)
 

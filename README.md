@@ -771,8 +771,8 @@ GitHub builds every version for you (see `.github/workflows/release.yml`):
 1. Change `__version__` in `treerot.py`, commit and push.
 2. Tag the same version and push the tag:
    ```
-   git tag v1.2.0
-   git push origin v1.2.0
+   git tag v1.3.0
+   git push origin v1.3.0
    ```
 3. GitHub Actions is set up to run the tests on Windows, Linux and macOS, then to build the
    Windows, Linux and macOS (Apple Silicon and Intel) versions on their own systems, check that
