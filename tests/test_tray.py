@@ -212,11 +212,22 @@ class X11Icon(unittest.TestCase):
         self.assertEqual(t.opened, [True])
         self.assertEqual(t.menus, [])
 
-    def test_a_right_click_opens_the_menu_where_the_icon_is(self):
-        t = self.tray(events=[self.event(5, button=3, x_root=1260, y_root=8),
-                              self.event(5, button=3)])
+    def test_a_real_right_click_opens_the_menu_where_it_was(self):
+        t = self.tray(events=[self.event(5, button=3, x_root=1260, y_root=900)])
         t._pump()
-        self.assertEqual(t.menus, [(1260, 8), (300, 20)])   # no position given: the pointer's
+        self.assertEqual(t.menus, [(1260, 900)])
+
+    def test_gnome_right_click_opens_the_menu_under_the_top_bar(self):
+        # GNOME sends only a spot inside the icon (root position = icon position)
+        click = self.event(5, button=3, x_root=8, y_root=8)
+        click.button.x = click.button.y = 8
+        t = self.tray(events=[click, self.event(5, button=3)])
+        t._top_bar_height = lambda: 64
+        t.root.winfo_screenwidth = lambda: 3072
+        t._pump()
+        self.assertEqual(t.menus, [(300, 64), (300, 64)])    # the pointer is in the top bar
+        t.root.winfo_pointerxy = lambda: (500, 900)          # not up there: the right end
+        self.assertEqual(t._menu_spot(), (3072, 64))
 
     def test_clicks_for_other_windows_are_ignored(self):
         t = self.tray(events=[self.event(5, window=9, button=1)])

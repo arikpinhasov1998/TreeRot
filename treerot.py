@@ -2737,15 +2737,53 @@ class X11Tray:
                 if b.button == 1:
                     self.root.after(0, self.on_open)
                 elif b.button in (2, 3):
-                    px, py = b.x_root, b.y_root
-                    if px <= 0 and py <= 0:
-                        try:
-                            px, py = self.root.winfo_pointerxy()
-                        except tk.TclError:
-                            pass
+                    if (b.x_root, b.y_root) != (b.x, b.y) and (b.x_root > 0 or b.y_root > 0):
+                        px, py = b.x_root, b.y_root    # a real click: its real place
+                    else:
+                        px, py = self._menu_spot()     # GNOME: only a spot inside the icon
                     self.root.after(0, lambda px=px, py=py: self.on_menu(px, py))
             elif kind == 22 and ev.configure.window == self.wid:    # ConfigureNotify
                 self._fit(ev.configure.width, ev.configure.height)
+
+    def _top_bar_height(self):
+        """How tall the desktop's top bar is (the top of the freedesktop work area), or 0."""
+        import ctypes
+        x, d = self.x, self.display
+        try:
+            x.XGetWindowProperty.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p]
+            kind, fmt = ctypes.c_ulong(), ctypes.c_int()
+            n, left, data = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.POINTER(ctypes.c_long)()
+            ok = x.XGetWindowProperty(d, x.XDefaultRootWindow(d),
+                                      x.XInternAtom(d, b"_NET_WORKAREA", 0), 0, 4, 0, 0,
+                                      ctypes.byref(kind), ctypes.byref(fmt), ctypes.byref(n),
+                                      ctypes.byref(left), ctypes.byref(data))
+            if ok != 0 or not data:
+                return 0
+            try:
+                return int(data[1]) if n.value >= 2 and fmt.value == 32 else 0
+            finally:
+                x.XFree(data)
+        except (OSError, AttributeError, ValueError):
+            return 0
+
+    def _menu_spot(self):
+        """Where the icon's menu opens. A tray click carries no screen position (GNOME sends
+        the middle of the icon instead), so the menu opens just under the top bar: below the
+        pointer when the pointer is up there, else at the right end, where tray icons sit
+        (Tk keeps a menu on the screen, so "far right" lands it against the edge)."""
+        import tkinter as tk
+        top = self._top_bar_height()
+        try:
+            px, py = self.root.winfo_pointerxy()
+            width = self.root.winfo_screenwidth()
+        except tk.TclError:
+            return 0, top
+        if top and 0 <= py <= top:
+            return px, top
+        return width, top
 
     def _fit(self, width, height):
         """The tray picks the icon's size: show the logo drawn for that size, whole."""
