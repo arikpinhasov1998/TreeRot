@@ -132,6 +132,7 @@ APP_NAME = "TreeRot"
 CREDIT = "Created by Arik Pinhasov"
 CREDIT_URL = "https://github.com/arikpinhasov1998"
 ICON_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAADAUlEQVR42u2bv2sUQRTH5w+5v8DGYHVcGWwsLNfCKhAEsRJyYmMdq8NCsAhioaIQJEiKSOwUOSVY+gPBBDlBJSAo2I/7XXLLMuyPmb33Yza3Bw+OC2Hv+7l5896bN8+Yhte/v7+GqU1Sm6ZmO2LTk+88NG1f6T8nqc06JLrKoCEJET5IbfsUCHcNmgY+4menUHxxNQyWVXw9BI1lv37pQmYa7lC24Yl+ib2dx3Z0ZpAZ3itASIoARJf+0c/Pdnx3IwfwbHzN/jn8IO4KxTgv9uB3R2/t+adX7LmbqzmAh6MV+yW5aH8fvJKGMDQnCYPIA++/f2LPPkgycwF8Wh1l9uPRliSAiZHK8K7vb+bi6wDAvt0ai2WMRkN8EwBJCEZDvA8AKQhGQ7wvAAkIbAA2X9+rFB8CAPb9zu1uAdj9+KJWfCgA2PHeTjcAIMlBnKcGgDyBI1kykn6/CACu/cBQZ3k+4tsCgFFni6QALj+/wQ7g69W1OAGE/PqLAKBeBUba90MAoC7AxgdDKOTYC8gAhIj3AVAW9gBk/veoAPjE/RAACHlVz6LOC4zG8l+kGqR2AxIAPolPqAuUPQd7gc8qEQcQKr5tOYzPmiCJAwgNfyFRADEfuz8MvzhHODQaG+CieQDlRtgD6AF0EAD2BthSAoiuGMIBiCQA6r5BtHlA3ckQwh9VRWikzwF8AcwFIvtzEyBKVzASJ8ChANxTYMDgOimOshp0/bxYA0RZDbYpiJrK4eIJsOsCVIUQKYBQN2jaAyASwuHrnI0SQ9kPkEqEKPsD/alw3xfoO0P0vUEuAJ3oDbp3gagAcN0dYrsf0OQKIQA4L0mwAWhqk/sC4GqLi1yRqYsKvgC47w6yX5KqqhN8AHDdChEFUAWhTW+wswDKINQBkBIvCsCFUAVAUvwcwFQDQhkAafHzq7IT4YdmEFwACuLzy9JDhQfHMDBh87E6jVmhCADM+pEZzaEpZQDb6mNzigDimB08ePMyB4D36uI1RmchXFB88+hsPzy9hOPz/wGvgFbabsQh1AAAAABJRU5ErkJggg=='
+ICON_LARGE_PNG_B64 = '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'   # 256 px: taskbar, dock, notifications
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".treerot.json")
 OLD_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".folder_activity_scanner.json")
@@ -1106,37 +1107,68 @@ def _kde_prefers_dark(env):
     return None
 
 
+_TOOL_ENV_DROP = ("GIO_MODULE_DIR", "GIO_EXTRA_MODULES", "GSETTINGS_SCHEMA_DIR",
+                  "GSETTINGS_BACKEND", "GTK_PATH", "GTK_EXE_PREFIX", "GTK_IM_MODULE_FILE",
+                  "LD_PRELOAD")
+
+
+def desktop_tool_env(env=None):
+    """The environment for asking the desktop (gdbus, gsettings): without what a snap, Flatpak
+    or a bundled program put in, which can make those tools read defaults instead of the user's
+    real settings. A bundled TreeRot gets its own library path back off the tools."""
+    env = dict(os.environ if env is None else env)
+    for key in _TOOL_ENV_DROP:
+        env.pop(key, None)
+    if "LD_LIBRARY_PATH_ORIG" in env:      # set by the bundled (PyInstaller) program
+        env["LD_LIBRARY_PATH"] = env.pop("LD_LIBRARY_PATH_ORIG")
+    elif getattr(sys, "frozen", False):
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def system_prefers_dark(platform=None, run=None, env=None):
     """True when the computer is set to a dark appearance, False for light, None when it cannot
-    tell. Windows: the apps setting in Personalization; macOS: Appearance; Linux: the GNOME or
-    freedesktop color scheme, the GTK theme name, or KDE's color scheme."""
+    tell. Windows: the apps setting in Personalization; macOS: Appearance; Linux: the desktop's
+    own answer (the freedesktop settings portal: GNOME, KDE and others), then GTK_THEME, the
+    GNOME settings, and KDE's color scheme. run(cmd, env) runs a tool."""
     platform = platform or sys.platform
-    run = run or (lambda cmd: _run_tool(cmd, timeout=2))
+    run = run or (lambda cmd, tool_env=None: _run_tool(cmd, env=tool_env, timeout=2))
     env = os.environ if env is None else env
     if platform == "win32":
         return _windows_prefers_dark()
     if platform == "darwin":
-        res = run(["defaults", "read", "-g", "AppleInterfaceStyle"])
+        res = run(["defaults", "read", "-g", "AppleInterfaceStyle"], None)
         if res.returncode == -1:
             return None
         return _out(res).lower() == "dark"       # the key is missing in light mode
+    clean = desktop_tool_env(env)
+    res = run(["gdbus", "call", "--session", "--dest", "org.freedesktop.portal.Desktop",
+               "--object-path", "/org/freedesktop/portal/desktop", "--method",
+               "org.freedesktop.portal.Settings.ReadOne", "org.freedesktop.appearance",
+               "color-scheme"], clean)
+    if res.returncode != 0:                 # portals before version 2 only have Read
+        res = run(["gdbus", "call", "--session", "--dest", "org.freedesktop.portal.Desktop",
+                   "--object-path", "/org/freedesktop/portal/desktop", "--method",
+                   "org.freedesktop.portal.Settings.Read", "org.freedesktop.appearance",
+                   "color-scheme"], clean)
+    if res.returncode == 0:
+        found = re.search(r"uint32 (\d+)", _out(res))
+        if found and found.group(1) in ("1", "2"):    # 1 dark, 2 light, 0 no preference
+            return found.group(1) == "1"
     gtk = env.get("GTK_THEME", "")
     if gtk:
         return "dark" in gtk.lower()
     answered = False
-    res = run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"])
-    if res.returncode == 0:
+    for key in ("color-scheme", "gtk-theme"):
+        res = run(["gsettings", "get", "org.gnome.desktop.interface", key], clean)
+        if res.returncode != 0 or b"memory" in (res.stderr or b"").lower():
+            continue                     # no gsettings, or it is not reading the real settings
         answered = True
-        scheme = _out(res).lower()
-        if "prefer-dark" in scheme:
+        value = _out(res).lower()
+        if "dark" in value:
             return True
-        if "prefer-light" in scheme:
+        if "prefer-light" in value:
             return False
-    res = run(["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"])
-    if res.returncode == 0:
-        answered = True
-        if "dark" in _out(res).lower():
-            return True
     kde = _kde_prefers_dark(env)
     if kde is not None:
         return kde
@@ -1253,6 +1285,9 @@ AUTOSTART_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME")
 LAUNCH_AGENTS_DIR = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
 WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 POWERSHELL_APP_ID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+APP_ID = "io.github.arikpinhasov1998.TreeRot"   # Windows: groups the taskbar, names notifications
+WINDOWS_APP_ID_KEY = "Software\\Classes\\AppUserModelId\\" + APP_ID
+ICON_FILE_NAME = "treerot.png"
 _JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
 
 
@@ -1341,6 +1376,8 @@ def _run_tool(cmd, env=None, timeout=TOOL_TIMEOUT):
     """Runs a system tool quietly. A tool that is missing or does not answer comes back as a
     failure (return code -1), never as an exception."""
     kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}    # CREATE_NO_WINDOW
+    if env is None and getattr(sys, "frozen", False) and sys.platform != "win32":
+        env = desktop_tool_env()          # system tools must not load the bundle's libraries
     try:
         return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env,
                               timeout=timeout, **kw)
@@ -1530,13 +1567,125 @@ _TOAST_SCRIPT = (
     "$ErrorActionPreference = 'Stop';"
     "[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
     "ContentType = WindowsRuntime];"
-    "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+    "[void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, "
+    "ContentType = WindowsRuntime];"
+    "$t = New-Object Windows.Data.Xml.Dom.XmlDocument;"
+    "$t.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text/><text/>"
+    "</binding></visual></toast>');"
     "$x = $t.GetElementsByTagName('text');"
     "[void]$x.Item(0).AppendChild($t.CreateTextNode($env:TREEROT_TITLE));"
     "[void]$x.Item(1).AppendChild($t.CreateTextNode($env:TREEROT_BODY));"
+    "if ($env:TREEROT_ICON) {"
+    " $i = $t.CreateElement('image');"
+    " $i.SetAttribute('placement', 'appLogoOverride');"
+    " $i.SetAttribute('src', $env:TREEROT_ICON);"
+    " [void]$t.GetElementsByTagName('binding').Item(0).AppendChild($i) };"
     "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-    f"'{POWERSHELL_APP_ID}').Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+    "$env:TREEROT_APP_ID).Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+
+
+def ntpath_uri(path):
+    """A file:/// address for a Windows path, with spaces and other letters encoded."""
+    from urllib.parse import quote
+    drive, _ = ntpath.splitdrive(path)
+    if not drive or not ntpath.isabs(path):   # not a full path: the notification goes without
+        return ""
+    if drive.startswith("\\\\"):              # \\server\share\...
+        return "file:" + quote(path.replace("\\", "/"), safe="/:")
+    return "file:///" + quote(path.replace("\\", "/"), safe="/:")
+
+
+def icon_file():
+    """The logo as a PNG file next to TreeRot's records (~/.treerot/treerot.png), for places
+    that need a file: notifications and login items. None if it cannot be written."""
+    path = os.path.join(os.path.dirname(JOBS_DIR), ICON_FILE_NAME)
+    import base64
+    data = base64.b64decode(ICON_LARGE_PNG_B64)
+    try:
+        with open(path, "rb") as f:
+            if f.read() == data:
+                return path
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        return path
+    except OSError:
+        return None
+
+
+LINUX_WM_CLASS = "Treerot"      # what Tk names the window class for className="TreeRot"
+LINUX_DESKTOP_FILE = "treerot.desktop"     # the window class in lower case: matched by name too
+OLD_LINUX_DESKTOP_FILES = ("io.github.arikpinhasov1998.TreeRot.desktop",)
+APPLICATIONS_DIR = os.path.join(os.environ.get("XDG_DATA_HOME")
+                                or os.path.join(os.path.expanduser("~"), ".local", "share"),
+                                "applications")
+
+
+def linux_desktop_entry(cmd, icon):
+    """A hidden launcher entry: GNOME, KDE and others take a window's taskbar/dock icon only from
+    an entry whose StartupWMClass matches the window. NoDisplay keeps it out of the app menu."""
+    return ("[Desktop Entry]\nType=Application\n"
+            f"Name={APP_NAME}\n"
+            "Comment=Find the folders nobody uses\n"
+            f"Exec={_desktop_exec(cmd)}\n"
+            + (f"Icon={icon}\n" if icon else "") +
+            f"StartupWMClass={LINUX_WM_CLASS}\n"
+            "NoDisplay=true\nTerminal=false\nCategories=Utility;\n")
+
+
+def install_linux_desktop_entry():
+    """Writes the hidden entry for this copy of TreeRot (your own account, no administrator).
+    It is written again whenever the program moved, so it always points at the copy in use.
+    Returns True when the entry was just written or changed: the desktop reads it a moment
+    later, after the window may already have been shown with a plain icon."""
+    path = os.path.join(APPLICATIONS_DIR, LINUX_DESKTOP_FILE)
+    for old in OLD_LINUX_DESKTOP_FILES:
+        try:
+            os.remove(os.path.join(APPLICATIONS_DIR, old))
+        except OSError:
+            pass
+    text = linux_desktop_entry(self_command(), icon_file())
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return False
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
+
+
+def _set_windows_app_id(values):
+    """Writes TreeRot's name and icon for Windows notifications, in the user's own registry."""
+    import winreg
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, WINDOWS_APP_ID_KEY, 0,
+                            winreg.KEY_SET_VALUE) as k:
+        for name, value in values.items():
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
+
+
+def windows_app_id(icon):
+    """The id Windows notifications are sent under: TreeRot's own, with its name and icon, or
+    PowerShell's when TreeRot's cannot be registered."""
+    if not icon:
+        return POWERSHELL_APP_ID
+    try:
+        _set_windows_app_id({"DisplayName": APP_NAME, "IconUri": icon})
+        return APP_ID
+    except (OSError, ImportError):
+        return POWERSHELL_APP_ID
 
 
 def notify(title, body, platform=None, run=None):
@@ -1546,7 +1695,10 @@ def notify(title, body, platform=None, run=None):
     if platform == "win32":
         root = os.environ.get("SystemRoot") or "C:\\Windows"
         ps = ntpath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-        env = dict(os.environ, TREEROT_TITLE=title, TREEROT_BODY=body)
+        icon = icon_file()
+        env = dict(os.environ, TREEROT_TITLE=title, TREEROT_BODY=body,
+                   TREEROT_APP_ID=windows_app_id(icon),
+                   TREEROT_ICON=ntpath_uri(icon) if icon else "")
         return run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                     "-Command", _TOAST_SCRIPT], env=env).returncode == 0
     if platform == "darwin":
@@ -1558,7 +1710,9 @@ def notify(title, body, platform=None, run=None):
     env = _linux_notify_env(run)
     if env is None:
         return False
-    return run(["notify-send", "--app-name", APP_NAME, title, body], env=env).returncode == 0
+    icon = icon_file()
+    cmd = ["notify-send", "--app-name", APP_NAME] + (["--icon", icon] if icon else [])
+    return run(cmd + [title, body], env=env).returncode == 0
 
 
 def job_notice(job, row):
@@ -1637,6 +1791,7 @@ def install_login_check(platform=None):
     path = _login_check_files(platform)
     if path is None:
         return
+    icon = icon_file() if platform.startswith("linux") else None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
     if platform == "darwin":
@@ -1650,6 +1805,7 @@ def install_login_check(platform=None):
                     f"Name={LOGIN_CHECK_NAME}\n"
                     f"Comment=Shows how {APP_NAME} background scans ended while you were away\n"
                     f"Exec={_desktop_exec(cmd)}\nNoDisplay=true\nTerminal=false\n"
+                    + (f"Icon={icon}\n" if icon else "") +
                     "X-GNOME-Autostart-enabled=true\n")
     os.replace(tmp, path)
 
@@ -2150,7 +2306,554 @@ def gui_unavailable(reason):
     sys.exit(3)
 
 
-def run_gui(preload=None, on_ready=None):
+# --------------------------------------------------------------------------
+# Staying open in the tray
+# --------------------------------------------------------------------------
+
+TRAY_ALLOWED = True                  # tests turn this off: no icon in the real tray
+START_HIDDEN_FLAG = "--tray"         # "Start with my computer" opens TreeRot hidden in the tray
+STARTUP_NAME = "TreeRot"             # Windows: the value under the Run key
+STARTUP_LABEL = "io.github.arikpinhasov1998.treerot"
+STARTUP_DESKTOP = "treerot-startup.desktop"
+INSTANCE_FILE_NAME = "instance.json"
+
+
+def _get_windows_run_value(name):
+    """The command under the user's own Run key, or None."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+
+
+def _startup_file(platform):
+    if platform.startswith("linux"):
+        return os.path.join(AUTOSTART_DIR, STARTUP_DESKTOP)
+    if platform == "darwin":
+        return os.path.join(LAUNCH_AGENTS_DIR, STARTUP_LABEL + ".plist")
+    return None
+
+
+def startup_enabled(platform=None):
+    """True when TreeRot opens (hidden in the tray) when the user logs in."""
+    platform = platform or sys.platform
+    if platform == "win32":
+        return bool(_get_windows_run_value(STARTUP_NAME))
+    path = _startup_file(platform)
+    return bool(path) and os.path.exists(path)
+
+
+def set_startup(enabled, platform=None):
+    """Turns "Start with my computer" on or off. Your own account only, no administrator."""
+    platform = platform or sys.platform
+    cmd = self_command() + [START_HIDDEN_FLAG]
+    if platform == "win32":
+        _set_windows_run_value(STARTUP_NAME, subprocess.list2cmdline(cmd) if enabled else None)
+        return
+    path = _startup_file(platform)
+    if path is None:
+        return
+    if not enabled:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    if platform == "darwin":
+        import plistlib
+        with open(tmp, "wb") as f:
+            plistlib.dump({"Label": STARTUP_LABEL, "ProgramArguments": cmd,
+                           "RunAtLoad": True}, f)
+    else:
+        icon = icon_file()
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\n"
+                    f"Name={APP_NAME}\n"
+                    f"Comment=Keeps {APP_NAME} ready in the tray\n"
+                    f"Exec={_desktop_exec(cmd)}\n"
+                    + (f"Icon={icon}\n" if icon else "") +
+                    "Terminal=false\nX-GNOME-Autostart-enabled=true\n")
+    os.replace(tmp, path)
+
+
+# ---- one TreeRot at a time: starting it again shows the one already running
+
+def instance_file():
+    return os.path.join(os.path.dirname(JOBS_DIR), INSTANCE_FILE_NAME)
+
+
+def ask_running_instance(request="show", timeout=2.0):
+    """Asks a TreeRot that is already open to show its window. True if one answered.
+    It listens on this computer only (127.0.0.1) and answers only with the secret it wrote
+    in your home folder."""
+    try:
+        with open(instance_file(), encoding="utf-8") as f:
+            info = json.load(f)
+        port, token = int(info["port"]), str(info["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+            s.sendall(f"{token} {request}\n".encode())
+            s.settimeout(timeout)
+            return s.recv(16).startswith(b"ok")
+    except OSError:
+        return False
+
+
+class InstanceServer:
+    """Listens for a second start of TreeRot and passes its request on (from a worker
+    thread: on_request must only queue it)."""
+
+    def __init__(self, on_request):
+        import secrets
+        self.on_request = on_request
+        self.token = secrets.token_hex(16)
+        self.sock = None
+        self.path = instance_file()
+
+    def start(self):
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.bind(("127.0.0.1", 0))
+            self.sock.listen(4)
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = f"{self.path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"port": self.sock.getsockname()[1], "token": self.token,
+                           "pid": os.getpid()}, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            self.close()
+            return False
+        threading.Thread(target=self._serve, daemon=True).start()
+        return True
+
+    def _serve(self):
+        sock = self.sock
+        while sock is not None:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            with conn:
+                try:
+                    conn.settimeout(2)
+                    line = conn.recv(256).decode("ascii", "replace").strip().split()
+                    if len(line) == 2 and line[0] == self.token:
+                        conn.sendall(b"ok\n")
+                        self.on_request(line[1])
+                except OSError:
+                    pass
+
+    def close(self):
+        sock, self.sock = self.sock, None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            try:                             # only our own file: a newer TreeRot may own it
+                with open(self.path, encoding="utf-8") as f:
+                    if json.load(f).get("token") == self.token:
+                        os.remove(self.path)
+            except (OSError, ValueError):
+                pass
+
+
+# ---- the tray icon itself
+
+def _x11():
+    import ctypes
+    import ctypes.util
+    name = ctypes.util.find_library("X11")
+    if not name:
+        return None
+    x = ctypes.CDLL(name)
+    x.XOpenDisplay.restype = ctypes.c_void_p
+    x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x.XInternAtom.restype = ctypes.c_ulong
+    x.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x.XGetSelectionOwner.restype = ctypes.c_ulong
+    x.XChangeProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                                  ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
+                                  ctypes.c_int]
+    x.XFlush.argtypes = [ctypes.c_void_p]
+    return x
+
+
+class _XClientMessage:
+    @staticmethod
+    def build():
+        import ctypes
+
+        class XClientMessageEvent(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("l", ctypes.c_long * 5)]
+
+        class XEvent(ctypes.Union):
+            _fields_ = [("xclient", XClientMessageEvent), ("pad", ctypes.c_long * 24)]
+        return XEvent
+
+
+class X11Tray:
+    """A tray icon for Linux desktops with a system tray (the freedesktop "XEmbed" tray: GNOME
+    with the AppIndicator extension, as on Ubuntu, KDE, Xfce, Cinnamon, MATE...). The icon is a
+    small Tk window that the tray takes in."""
+
+    def __init__(self, root, image, background, on_open, on_menu):
+        self.root, self.on_open, self.on_menu = root, on_open, on_menu
+        self.x = _x11()
+        self.display = self.x.XOpenDisplay(None) if self.x else None
+        if not self.display:
+            raise OSError("no X display")
+        screen = root.winfo_screen().split(".")[-1] if "." in root.winfo_screen() else "0"
+        self.selection = self.x.XInternAtom(self.display,
+                                            f"_NET_SYSTEM_TRAY_S{screen}".encode(), 0)
+        self.owner = 0
+        self.win = None
+        self.image, self.background = image, background
+        self._job = None
+        if not self._dock():
+            self.close()
+            raise OSError("no system tray")
+        self._job = root.after(5000, self._watch)
+
+    @staticmethod
+    def available(platform=None):
+        platform = platform or sys.platform
+        if not platform.startswith("linux") or not os.environ.get("DISPLAY"):
+            return False
+        x = _x11()
+        if x is None:
+            return False
+        d = x.XOpenDisplay(None)
+        if not d:
+            return False
+        try:
+            return x.XGetSelectionOwner(d, x.XInternAtom(d, b"_NET_SYSTEM_TRAY_S0", 0)) != 0
+        finally:
+            x.XCloseDisplay(d)
+
+    def _dock(self):
+        import ctypes
+        import tkinter as tk
+        self.owner = self.x.XGetSelectionOwner(self.display, self.selection)
+        if not self.owner:
+            return False
+        if self.win is not None:
+            try:
+                self.win.destroy()
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        label = tk.Label(win, image=self.image, bd=0, highlightthickness=0,
+                         bg=self.background)
+        label.pack(fill="both", expand=True)
+        label.bind("<ButtonRelease-1>", lambda e: self.on_open())
+        for button in ("<ButtonRelease-3>", "<ButtonRelease-2>"):
+            label.bind(button, lambda e: self.on_menu(e.x_root, e.y_root))
+        win.update_idletasks()
+        wid = int(win.wm_frame(), 16)
+        info_atom = self.x.XInternAtom(self.display, b"_XEMBED_INFO", 0)
+        info = (ctypes.c_long * 2)(0, 1)               # XEmbed version 0, mapped
+        self.x.XChangeProperty(self.display, wid, info_atom, info_atom, 32, 0, info, 2)
+        XEvent = _XClientMessage.build()
+        ev = XEvent()
+        ev.xclient.type = 33                            # ClientMessage
+        ev.xclient.window = self.owner
+        ev.xclient.message_type = self.x.XInternAtom(self.display, b"_NET_SYSTEM_TRAY_OPCODE",
+                                                     0)
+        ev.xclient.format = 32
+        for i, v in enumerate((0, 0, wid, 0, 0)):      # time, REQUEST_DOCK, window
+            ev.xclient.l[i] = v
+        self.x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                      ctypes.c_long, ctypes.POINTER(XEvent)]
+        self.x.XSendEvent(self.display, self.owner, 0, 0, ctypes.byref(ev))
+        self.x.XFlush(self.display)
+        self.win, self.label = win, label
+        # The tray has taken the window in by now: let Tk draw it there.
+        self.root.after(400, self._show_in_tray)
+        return True
+
+    def _show_in_tray(self):
+        import tkinter as tk
+        try:
+            if self.win is not None:
+                self.win.deiconify()
+        except tk.TclError:
+            pass
+
+    def _watch(self):
+        """A restarted tray (for example the desktop shell) forgets its icons: dock again."""
+        self._job = self.root.after(5000, self._watch)
+        if self.display and self.x.XGetSelectionOwner(self.display, self.selection) != self.owner:
+            self._dock()
+
+    def set_background(self, color):
+        import tkinter as tk
+        self.background = color
+        try:
+            self.label.configure(bg=color)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def close(self):
+        import tkinter as tk
+        if self._job is not None:
+            try:
+                self.root.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+        if self.win is not None:
+            try:
+                self.win.destroy()
+            except tk.TclError:
+                pass
+            self.win = None
+        if self.display:
+            self.x.XCloseDisplay(self.display)
+            self.display = None
+
+
+class WindowsTray:
+    """A notification-area icon on Windows, through the Windows API itself (no extra
+    package). Tk's own event loop delivers its messages."""
+
+    WM_TRAY = 0x8000 + 1                 # WM_APP + 1
+
+    def __init__(self, root, icon_png, on_open, on_menu):
+        import ctypes
+        from ctypes import wintypes
+        self.root, self.on_open, self.on_menu = root, on_open, on_menu
+        user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
+        kernel32 = ctypes.windll.kernel32
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                     wintypes.LPARAM)
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                          wintypes.LPARAM]
+        user32.DefWindowProcW.restype = LRESULT
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                        ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                        ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                        ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                        ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND),
+                        ("uID", wintypes.UINT), ("uFlags", wintypes.UINT),
+                        ("uCallbackMessage", wintypes.UINT), ("hIcon", wintypes.HICON),
+                        ("szTip", wintypes.WCHAR * 128), ("dwState", wintypes.DWORD),
+                        ("dwStateMask", wintypes.DWORD), ("szInfo", wintypes.WCHAR * 256),
+                        ("uVersion", wintypes.UINT), ("szInfoTitle", wintypes.WCHAR * 64),
+                        ("dwInfoFlags", wintypes.DWORD), ("guidItem", ctypes.c_byte * 16),
+                        ("hBalloonIcon", wintypes.HICON)]
+
+        self.user32, self.shell32 = user32, shell32
+        self.taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
+
+        def proc(hwnd, msg, wparam, lparam):
+            if msg == self.WM_TRAY:
+                event = lparam & 0xFFFF
+                if event == 0x0202:                          # WM_LBUTTONUP
+                    self.root.after(0, self.on_open)
+                elif event == 0x0205:                        # WM_RBUTTONUP
+                    point = wintypes.POINT()
+                    user32.GetCursorPos(ctypes.byref(point))
+                    user32.SetForegroundWindow(hwnd)         # the menu closes when clicked off
+                    self.root.after(0, lambda: self.on_menu(point.x, point.y))
+                return 0
+            if msg == self.taskbar_created:                  # Explorer restarted
+                self._add()
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        self._proc = WNDPROC(proc)                           # kept: Windows calls it later
+        hinst = kernel32.GetModuleHandleW(None)
+        cls = WNDCLASSW()
+        cls.lpfnWndProc = self._proc
+        cls.hInstance = hinst
+        cls.lpszClassName = "TreeRotTray"
+        user32.RegisterClassW(ctypes.byref(cls))             # fails harmlessly the second time
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                           wintypes.DWORD, ctypes.c_int, ctypes.c_int,
+                                           ctypes.c_int, ctypes.c_int, wintypes.HWND,
+                                           wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
+        self.hwnd = user32.CreateWindowExW(0, "TreeRotTray", "TreeRot", 0, 0, 0, 0, 0, None,
+                                           None, hinst, None)
+        if not self.hwnd:
+            raise OSError("the tray window could not be made")
+        user32.CreateIconFromResourceEx.restype = wintypes.HICON
+        user32.CreateIconFromResourceEx.argtypes = [ctypes.c_char_p, wintypes.DWORD,
+                                                    wintypes.BOOL, wintypes.DWORD, ctypes.c_int,
+                                                    ctypes.c_int, wintypes.UINT]
+        self.hicon = user32.CreateIconFromResourceEx(icon_png, len(icon_png), True,
+                                                     0x00030000, 0, 0, 0)
+        data = NOTIFYICONDATAW()
+        data.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        data.hWnd = self.hwnd
+        data.uID = 1
+        data.uFlags = 0x1 | 0x2 | 0x4                       # MESSAGE | ICON | TIP
+        data.uCallbackMessage = self.WM_TRAY
+        data.hIcon = self.hicon
+        data.szTip = APP_NAME
+        self.data = data
+        if not self._add():
+            self.close()
+            raise OSError("the tray icon could not be added")
+
+    @staticmethod
+    def available(platform=None):
+        return (platform or sys.platform) == "win32"
+
+    def _add(self):
+        import ctypes
+        return bool(self.shell32.Shell_NotifyIconW(0, ctypes.byref(self.data)))   # NIM_ADD
+
+    def set_background(self, color):
+        pass
+
+    def close(self):
+        import ctypes
+        if getattr(self, "data", None) is not None:
+            self.shell32.Shell_NotifyIconW(2, ctypes.byref(self.data))            # NIM_DELETE
+            self.data = None
+        if getattr(self, "hwnd", None):
+            self.user32.DestroyWindow(self.hwnd)
+            self.hwnd = None
+
+
+
+class MacTray:
+    """An icon in the macOS menu bar (the Mac's tray), made through the system's own
+    Objective-C runtime (no extra package). Tk already runs the Mac's event loop."""
+
+    def __init__(self, root, icon_png, on_open, on_menu):
+        import ctypes
+        import ctypes.util
+        self.root, self.on_open, self.on_menu = root, on_open, on_menu
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        ctypes.cdll.LoadLibrary("/System/Library/Frameworks/AppKit.framework/AppKit")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.objc_allocateClassPair.restype = ctypes.c_void_p
+        objc.objc_allocateClassPair.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+        objc.objc_registerClassPair.argtypes = [ctypes.c_void_p]
+        objc.class_addMethod.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.c_char_p]
+        self.objc = objc
+
+        class NSSize(ctypes.Structure):
+            _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+        def cls(name):
+            return objc.objc_getClass(name.encode())
+
+        def send(obj, name, *args, restype=ctypes.c_void_p, argtypes=()):
+            f = ctypes.cast(objc.objc_msgSend, ctypes.CFUNCTYPE(
+                restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes))
+            return f(obj, objc.sel_registerName(name.encode()), *args)
+        self.send = send
+
+        IMP = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+
+        def clicked(this, sel, sender):
+            app = send(cls("NSApplication"), "sharedApplication")
+            event = send(app, "currentEvent")
+            kind = send(event, "type", restype=ctypes.c_ulong) if event else 0
+            flags = send(event, "modifierFlags", restype=ctypes.c_ulong) if event else 0
+            if kind == 4 or flags & (1 << 18):            # right button, or control-click
+                x, y = self.root.winfo_pointerxy()
+                self.root.after(0, lambda: self.on_menu(x, y))
+            else:
+                self.root.after(0, self.on_open)
+        self._imp = IMP(clicked)                          # kept: macOS calls it later
+        name = b"TreeRotTrayTarget"
+        target_cls = objc.objc_getClass(name)
+        if not target_cls:
+            target_cls = objc.objc_allocateClassPair(cls("NSObject"), name, 0)
+            objc.class_addMethod(target_cls, objc.sel_registerName(b"clicked:"),
+                                 ctypes.cast(self._imp, ctypes.c_void_p), b"v@:@")
+            objc.objc_registerClassPair(target_cls)
+        self.target = send(send(target_cls, "alloc"), "init")
+        self.bar = send(cls("NSStatusBar"), "systemStatusBar")
+        self.item = send(self.bar, "statusItemWithLength:", ctypes.c_double(-1.0),
+                         argtypes=(ctypes.c_double,))
+        if not self.item:
+            raise OSError("no menu bar item")
+        send(self.item, "retain")
+        button = send(self.item, "button")
+        data = send(cls("NSData"), "dataWithBytes:length:", icon_png, len(icon_png),
+                    argtypes=(ctypes.c_char_p, ctypes.c_ulong))
+        image = send(send(cls("NSImage"), "alloc"), "initWithData:", data,
+                     argtypes=(ctypes.c_void_p,))
+        send(image, "setSize:", NSSize(18, 18), restype=None, argtypes=(NSSize,))
+        send(button, "setImage:", image, restype=None, argtypes=(ctypes.c_void_p,))
+        tip = send(cls("NSString"), "stringWithUTF8String:", APP_NAME.encode(),
+                   argtypes=(ctypes.c_char_p,))
+        send(button, "setToolTip:", tip, restype=None, argtypes=(ctypes.c_void_p,))
+        send(button, "setTarget:", self.target, restype=None, argtypes=(ctypes.c_void_p,))
+        send(button, "setAction:", objc.sel_registerName(b"clicked:"), restype=None,
+             argtypes=(ctypes.c_void_p,))
+        send(button, "sendActionOn:", (1 << 2) | (1 << 4), restype=ctypes.c_long,
+             argtypes=(ctypes.c_ulonglong,))             # left and right mouse button up
+
+    @staticmethod
+    def available(platform=None):
+        return (platform or sys.platform) == "darwin"
+
+    def set_background(self, color):
+        pass
+
+    def close(self):
+        import ctypes
+        if getattr(self, "item", None):
+            self.send(self.bar, "removeStatusItem:", self.item, restype=None,
+                      argtypes=(ctypes.c_void_p,))
+            self.send(self.item, "release", restype=None)
+            self.item = None
+
+
+def make_tray(root, background, on_open, on_menu, platform=None):
+    """The tray icon for this system, or None when there is no tray to put it in (then
+    closing the window quits TreeRot, as before)."""
+    import base64
+    platform = platform or sys.platform
+    if not TRAY_ALLOWED:
+        return None
+    try:
+        if platform == "win32":
+            return WindowsTray(root, base64.b64decode(ICON_PNG_B64), on_open, on_menu)
+        if platform == "darwin":
+            return MacTray(root, base64.b64decode(ICON_PNG_B64), on_open, on_menu)
+        if X11Tray.available(platform):
+            import tkinter as tk
+            image = tk.PhotoImage(master=root, data=ICON_PNG_B64).subsample(2)
+            tray = X11Tray(root, image, background, on_open, on_menu)
+            tray.image = image                    # kept: Tk drops an image nothing refers to
+            return tray
+    except Exception:                              # no tray: TreeRot works as a plain window
+        return None
+    return None
+
+
+def run_gui(preload=None, on_ready=None, hidden=False):
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
@@ -2158,12 +2861,27 @@ def run_gui(preload=None, on_ready=None):
         gui_unavailable(f"tkinter is not installed ({e}). Linux: install python3-tk. "
                         "macOS with Homebrew: brew install python-tk.")
 
+    if on_ready is None and ask_running_instance("ping" if hidden else "show"):
+        return                         # TreeRot is already open: it shows its window
+    new_entry = False
+    if sys.platform.startswith("linux"):   # the dock and taskbar show TreeRot's logo
+        new_entry = install_linux_desktop_entry()
+    if sys.platform == "win32":         # the taskbar shows TreeRot's icon, not Python's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except Exception:
+            pass
+
     class App(tk.Tk):
         def __init__(self):
-            super().__init__()
+            super().__init__(className=APP_NAME)
             self.title(f"{APP_NAME} {__version__}")
             try:                                   # Tk before 8.6 cannot read PNG; the window then has no icon
-                self.iconphoto(True, tk.PhotoImage(data=ICON_PNG_B64))
+                big = tk.PhotoImage(master=self, data=ICON_LARGE_PNG_B64)
+                mid = tk.PhotoImage(master=self, data=ICON_PNG_B64)
+                self._icons = [big, mid, mid.subsample(2)]   # kept: Tk drops unreferenced images
+                self.iconphoto(True, *self._icons)           # every window, every size
             except tk.TclError:
                 pass
 
@@ -2219,7 +2937,29 @@ def run_gui(preload=None, on_ready=None):
             self._quick_period("Last 2 years")
             for ex in self.settings.get("excludes", []):
                 self.ex_list.insert("end", ex)
-            self.protocol("WM_DELETE_WINDOW", self._on_close)
+            self.protocol("WM_DELETE_WINDOW", self._close_window)
+            self._instance = None     # answers a second start of TreeRot
+            self.startup_var = tk.BooleanVar(value=False)
+            self.tray_menu = tk.Menu(self, tearoff=0)
+            self.tray_menu.add_command(label=f"Open {APP_NAME}", command=self._show)
+            if background_available():
+                self.tray_menu.add_command(label="Background scans",
+                                           command=lambda: (self._show(), self._jobs_panel()))
+            self.tray_menu.add_separator()
+            self.tray_menu.add_checkbutton(label="Start with my computer",
+                                           variable=self.startup_var,
+                                           command=self._toggle_startup)
+            self.tray_menu.add_separator()
+            self.tray_menu.add_command(label=f"Quit {APP_NAME}", command=self._quit)
+            self.tray = make_tray(self, self._tray_background(), self._show, self._tray_menu_at)
+            if self.tray is not None:
+                try:
+                    self.startup_var.set(startup_enabled())
+                except Exception:
+                    pass
+            if sys.platform == "darwin":       # clicking the Dock icon opens the window again
+                self.createcommand("::tk::mac::ReopenApplication", self._show)
+                self.createcommand("::tk::mac::Quit", self._quit)
             self._clear_summary()
             self._poll_job = self.after(100, self._poll)
             self._theme_job = self.after(THEME_POLL_MS, self._check_system_theme)
@@ -2593,12 +3333,91 @@ def run_gui(preload=None, on_ready=None):
                 pass
             self._end_report()           # the browser must not outlive the window
             self._end_scan()
+            for res in ("tray", "_instance"):        # the tray icon goes with the program
+                obj = getattr(self, res, None)
+                if obj is not None:
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass
             for job in ("_poll_job", "_theme_job"):  # no stray callback into a dead interpreter
                 try:
                     self.after_cancel(getattr(self, job))
                 except (tk.TclError, AttributeError):
                     pass
             super().destroy()
+
+        # ---- staying open in the tray
+        def _tray_background(self):
+            """The tray icon's background: GNOME's top bar is always black."""
+            if "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper():
+                return "#000000"
+            return PALETTES[self.theme_mode or "light"]["bg"]
+
+        def _close_window(self):
+            """With a tray icon, closing the window only hides it: scans keep running and
+            the icon opens it again. Without one, closing quits as before."""
+            if self.tray is None:
+                self._on_close()
+                return
+            self._save_settings()
+            self.withdraw()
+            if not self.settings.get("tray_hint_shown"):
+                self.settings["tray_hint_shown"] = True
+                self._save_settings()
+                place = "menu bar" if sys.platform == "darwin" else "tray"
+                text = (f"{APP_NAME} is still running. Click its icon in the {place} to open it; "
+                        f"choose Quit {APP_NAME} in the icon's menu to close it.")
+                threading.Thread(target=notify, args=(APP_NAME, text), daemon=True).start()
+
+        def _show(self):
+            try:
+                if self.state() in ("withdrawn", "iconic"):
+                    self.deiconify()
+                self.lift()
+                self.focus_force()
+            except tk.TclError:
+                pass
+
+        def _tray_menu_at(self, x, y):
+            try:
+                self.tray_menu.tk_popup(x, y)
+            finally:
+                try:
+                    self.tray_menu.grab_release()
+                except tk.TclError:
+                    pass
+
+        def _toggle_startup(self):
+            want = bool(self.startup_var.get())
+            try:
+                set_startup(want)
+            except Exception as e:
+                self.startup_var.set(not want)
+                messagebox.showerror("Start with my computer",
+                                     f"This could not be changed: {e}")
+
+        def _quit(self):
+            """Quit from the tray menu: really closes TreeRot."""
+            if self._bg_starting:            # _on_close explains why it waits: be visible
+                self._show()
+            self._on_close()
+
+        def _remap(self):
+            """Hides and shows the window once, keeping its place and size: a desktop that
+            matched the window before it knew TreeRot's launcher entry looks again."""
+            try:
+                geometry, state = self.geometry(), self.state()
+                if state not in ("normal", "zoomed"):
+                    return
+                self.withdraw()
+                self.update_idletasks()
+                self.deiconify()
+                self.geometry(geometry)
+                if state == "zoomed":
+                    self.state("zoomed")
+            except tk.TclError:
+                pass
 
         # ---- light and dark appearance
         def _set_theme(self, choice):
@@ -2654,6 +3473,8 @@ def run_gui(preload=None, on_ready=None):
             for w in self.winfo_children():
                 if isinstance(w, tk.Toplevel):
                     self._theme_window(w)
+            if getattr(self, "tray", None) is not None:
+                self.tray.set_background(self._tray_background())
             self._recolor_popdowns(self, p)
 
         def _style_clam(self, style, p):
@@ -2846,6 +3667,9 @@ def run_gui(preload=None, on_ready=None):
             self.export_btn.config(state="disabled")
             self.report_btn.config(state="disabled")
             self.status_var.set("Checking the folder...")
+            self.prog_pct_var.set("")
+            self.prog_var.set("Checking the folder...")
+            self._bar_busy()
             q = self.q
 
             def work():
@@ -2856,8 +3680,23 @@ def run_gui(preload=None, on_ready=None):
                 q.put(("scan_checked", token, root, d_from, d_to, lo, hi, ok))
             threading.Thread(target=work, daemon=True).start()
 
+        def _bar_busy(self):
+            """Before the scan itself runs (checking the folder, counting) nothing can be
+            measured yet: the bar moves back and forth instead of filling up."""
+            if str(self.prog_bar.cget("mode")) != "indeterminate":
+                self.prog_bar.config(mode="indeterminate", value=0)
+                self.prog_bar.start(15)
+
+        def _bar_value(self, value):
+            """While the scan runs the bar fills up to show how far it got."""
+            if str(self.prog_bar.cget("mode")) != "determinate":
+                self.prog_bar.stop()
+                self.prog_bar.config(mode="determinate")
+            self.prog_bar["value"] = value
+
         def _scan_check_over(self, status):
             self._scan_checking = False
+            self._bar_value(0)
             self.scan_btn.config(state="normal")
             self.cancel_btn.config(state="disabled")
             self.export_btn.config(state="normal" if self.rows else "disabled")
@@ -2884,8 +3723,7 @@ def run_gui(preload=None, on_ready=None):
             self._clear_summary()
             self.meter = ProgressMeter()
             precount = self.precount_var.get()
-            self.prog_bar.stop()
-            self.prog_bar.config(mode="determinate", value=0)
+            self._bar_busy()                # determinate once the scan reports how far it got
             self.prog_pct_var.set("")
             self.prog_var.set("Starting...")
             self.scan_btn.config(state="disabled")
@@ -2976,6 +3814,10 @@ def run_gui(preload=None, on_ready=None):
                 self._poll_job = self.after(100, self._poll)
 
         def _handle_msg(self, msg):
+            if msg[0] == "instance":             # TreeRot was started again
+                if msg[1] == "show":
+                    self._show()
+                return
             if msg[0] == "system_theme":
                 self._theme_checking = False
                 if msg[1] != self._system_dark:
@@ -2987,14 +3829,9 @@ def run_gui(preload=None, on_ready=None):
                 v = self.meter.update(p)
                 pct, counts, times = progress_parts(p, v, "  \u00b7  ")
                 if p["phase"] == "count":
-                    if str(self.prog_bar.cget("mode")) != "indeterminate":
-                        self.prog_bar.config(mode="indeterminate")
-                        self.prog_bar.start(15)
+                    self._bar_busy()
                 else:
-                    if str(self.prog_bar.cget("mode")) != "determinate":
-                        self.prog_bar.stop()
-                        self.prog_bar.config(mode="determinate")
-                    self.prog_bar["value"] = v["fraction"] * 100
+                    self._bar_value(v["fraction"] * 100)
                 self.prog_pct_var.set(pct)
                 self.prog_var.set(f"{counts}     {times}")
                 cur = p.get("current") or ""
@@ -3007,9 +3844,9 @@ def run_gui(preload=None, on_ready=None):
                 try:
                     self.scan_elapsed = time.monotonic() - self.t0
                     self.n_excluded = n_excl
-                    self.prog_bar.stop()
-                    self.prog_bar.config(mode="determinate",
-                                         value=self.prog_bar["value"] if canceled else 100)
+                    counting = str(self.prog_bar.cget("mode")) == "indeterminate"
+                    self._bar_value(100 if not canceled else 0 if counting
+                                    else self.prog_bar["value"])
                     self.prog_pct_var.set("canceled" if canceled else "100%")
                     last = (self.meter.last if self.meter else None) or {}
                     self.prog_var.set(
@@ -3069,7 +3906,7 @@ def run_gui(preload=None, on_ready=None):
             elif msg[0] == "job_done":
                 self._job_done(*msg[1:])
             elif msg[0] == "error":
-                self.prog_bar.stop()
+                self._bar_value(0)
                 self.prog_var.set("Scan failed.")
                 self.scan_btn.config(state="normal")
                 self.cancel_btn.config(state="disabled")
@@ -4200,6 +5037,14 @@ def run_gui(preload=None, on_ready=None):
         app = App()
     except tk.TclError as e:               # typically: no display on a server / SSH session
         gui_unavailable(f"the window could not be created ({e}).")
+    if on_ready is None:             # a second start of TreeRot shows this one instead
+        app._instance = InstanceServer(lambda request: app.q.put(("instance", request)))
+        if not app._instance.start():
+            app._instance = None
+    if hidden and app.tray is not None:  # started with the computer: wait in the tray
+        app.withdraw()
+    if new_entry and on_ready is None:   # the desktop has read the new entry by now:
+        app.after(1500, app._remap)          # show the window again so the dock matches it
     if preload:                      # used for testing / screenshots
         app.path_var.set(preload)
         app.after(300, app._start)
@@ -4299,7 +5144,8 @@ def write_html_report(path, rows, meta, folder_basis=False, pdf=None, cancel_eve
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     payload = payload.replace("<", "\\u003c")   # still JSON, and nothing can end the <script>
     title = f"{APP_NAME} report - {meta.get('root', '')}"
-    page = REPORT_TEMPLATE.replace("__TITLE__", html_mod.escape(title)).replace("__DATA__", payload)
+    page = (REPORT_TEMPLATE.replace("__ICON__", ICON_PNG_B64)
+            .replace("__TITLE__", html_mod.escape(title)).replace("__DATA__", payload))
     _check_canceled(cancel_event)
     part = path + ".part"
     try:
@@ -4787,6 +5633,7 @@ REPORT_TEMPLATE = r'''<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,__ICON__">
 <style>
 :root {
   color-scheme: light;
@@ -6076,6 +6923,9 @@ def build_parser():
     ap.add_argument("--preload", metavar="PATH", help=argparse.SUPPRESS)
     ap.add_argument("--job-id", metavar="ID", help=argparse.SUPPRESS)       # a background scan
     ap.add_argument("--login-check", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument(START_HIDDEN_FLAG, dest="tray", action="store_true",
+                    help="open the window hidden, with only the tray icon showing (used by "
+                         "'Start with my computer')")
     return ap
 
 
@@ -6091,7 +6941,7 @@ def main(argv=None):
     try:
         if target:
             return run_cli(a, target)
-        run_gui(a.preload)
+        run_gui(a.preload, hidden=a.tray)
         return 0
     except KeyboardInterrupt:
         sys.stderr.write("\nInterrupted.\n")

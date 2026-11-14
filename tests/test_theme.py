@@ -11,10 +11,11 @@ def runner(answers):
     """A fake tool runner: answers maps the last word of a command to (code, output)."""
     calls = []
 
-    def run(cmd):
-        calls.append(cmd)
-        code, out = answers.get(cmd[-1], (-1, ""))
-        return subprocess.CompletedProcess(cmd, code, out.encode(), b"")
+    def run(cmd, env=None):
+        calls.append((cmd, env))
+        code, out, *err = answers.get(cmd[-1], (-1, ""))
+        return subprocess.CompletedProcess(cmd, code, out.encode(),
+                                           (err[0] if err else "").encode())
     run.calls = calls
     return run
 
@@ -136,3 +137,45 @@ class Window(GuiCase):
                 about[-1].destroy()
                 w._set_theme("System")
             self.drive(d, check)
+
+
+class DesktopPortal(unittest.TestCase):
+    """The desktop's own answer (freedesktop portal) comes first on Linux."""
+
+    def ask(self, answers, env=None):
+        run = runner(answers)
+        with tempfile.TemporaryDirectory() as d:
+            got = REAL_SYSTEM_PREFERS_DARK("linux", run, dict(env or {}, XDG_CONFIG_HOME=d))
+        return got, run.calls
+
+    def test_portal_dark_light_and_no_preference(self):
+        self.assertTrue(self.ask({"color-scheme": (0, "(<uint32 1>,)")})[0])
+        self.assertFalse(self.ask({"color-scheme": (0, "(<uint32 2>,)")})[0])
+        # 0 = no preference: the next sources decide
+        got, calls = self.ask({"color-scheme": (0, "(<uint32 0>,)"),
+                               "gtk-theme": (0, "'Yaru-dark'")})
+        self.assertTrue(got)
+
+    def test_older_portal_is_asked_with_read(self):
+        def run(cmd, env=None):
+            ok = "org.freedesktop.portal.Settings.Read" in cmd
+            return subprocess.CompletedProcess(cmd, 0 if ok else 1,
+                                               b"(<<uint32 1>>,)" if ok else b"", b"")
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(REAL_SYSTEM_PREFERS_DARK("linux", run, {"XDG_CONFIG_HOME": d}))
+
+    def test_settings_read_from_the_memory_fallback_are_ignored(self):
+        got, _ = self.ask({"color-scheme": (0, "'default'", "Using the 'memory' GSettings backend"),
+                           "gtk-theme": (0, "'Adwaita'", "Using the 'memory' GSettings backend")})
+        self.assertIsNone(got)
+
+    def test_tools_run_without_what_a_snap_or_bundle_put_in(self):
+        env = {"GIO_MODULE_DIR": "/snap/x", "GSETTINGS_SCHEMA_DIR": "/snap/y",
+               "LD_LIBRARY_PATH": "/tmp/_MEI1", "LD_LIBRARY_PATH_ORIG": "/usr/lib/x",
+               "HOME": "/h"}
+        _, calls = self.ask({}, env)
+        for cmd, tool_env in calls:
+            self.assertNotIn("GIO_MODULE_DIR", tool_env)
+            self.assertNotIn("GSETTINGS_SCHEMA_DIR", tool_env)
+            self.assertEqual(tool_env["LD_LIBRARY_PATH"], "/usr/lib/x")
+            self.assertEqual(tool_env["HOME"], "/h")

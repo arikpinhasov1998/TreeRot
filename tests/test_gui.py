@@ -1363,3 +1363,71 @@ class DialogsFitTheirContent(GuiCase):
             self.drive(d, check)
             self.assertGreater(seen["tree_h"], 100)
             self.assertGreaterEqual(seen["min_w"], seen["need_w"])
+
+
+class ProgressBarMode(GuiCase):
+    """Indeterminate while nothing can be measured yet (checking, counting), determinate once
+    the scan itself reports how far it got."""
+
+    def test_moving_until_the_scan_runs_then_filling_and_full_at_the_end(self):
+        seen = {}
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"a/f.txt": OLD})
+
+            def ready(w):
+                w.path_var.set(d)
+                w.from_var.set("2024-11-04")
+                w._start()
+                seen["start"] = str(w.prog_bar.cget("mode"))
+
+                def wait():
+                    if str(w.scan_btn.cget("state")) != "normal":
+                        w.after(100, wait)
+                        return
+                    seen["end"] = (str(w.prog_bar.cget("mode")), float(w.prog_bar["value"]))
+                    w.after(200, w.destroy)
+                w.after(100, wait)
+            app.run_gui(on_ready=ready)
+        self.assertEqual(seen["start"], "indeterminate")
+        self.assertEqual(seen["end"], ("determinate", 100.0))
+
+    def test_count_reports_move_the_bar_and_scan_reports_fill_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tree(d, {"f.txt": OLD})
+
+            def check(w):
+                w.meter = app.ProgressMeter()
+                w._handle_msg(("progress", {"phase": "count", "folders": 3, "files": 9,
+                                            "current": d}))
+                self.assertEqual(str(w.prog_bar.cget("mode")), "indeterminate")
+                w._handle_msg(("progress", {"phase": "scan", "folders": 1, "files": 2,
+                                            "bytes": 10, "fraction": 0.4, "exact": True,
+                                            "has_totals": True, "total_folders": 3,
+                                            "total_files": 9, "current": d}))
+                self.assertEqual(str(w.prog_bar.cget("mode")), "determinate")
+                self.assertAlmostEqual(float(w.prog_bar["value"]), 40.0)
+            self.drive(d, check)
+
+    def test_a_missing_folder_leaves_the_bar_still_and_empty(self):
+        seen = {}
+        app_messagebox = []
+
+        def ready(w):
+            import tkinter.messagebox as mb
+            real = mb.showerror
+            mb.showerror = lambda *a, **k: app_messagebox.append(a)
+            w.path_var.set(os.path.join(tempfile.gettempdir(), "treerot-no-such-folder-x"))
+            w.from_var.set("2024-11-04")
+            w._start()
+
+            def wait():
+                if w._scan_checking:
+                    w.after(50, wait)
+                    return
+                seen["mode"] = (str(w.prog_bar.cget("mode")), float(w.prog_bar["value"]))
+                mb.showerror = real
+                w.after(100, w.destroy)
+            w.after(50, wait)
+        app.run_gui(on_ready=ready)
+        self.assertEqual(seen["mode"], ("determinate", 0.0))
+        self.assertTrue(app_messagebox)

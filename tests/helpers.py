@@ -20,11 +20,18 @@ app.JOBS_DIR = os.path.join(_SETTINGS_DIR, "jobs")
 # Nor the real login items, and no real notification pops up during a test.
 app.AUTOSTART_DIR = os.path.join(_SETTINGS_DIR, "autostart")
 app.LAUNCH_AGENTS_DIR = os.path.join(_SETTINGS_DIR, "LaunchAgents")
+# Nor the real launcher entry that gives the window its dock icon on Linux.
+app.APPLICATIONS_DIR = os.path.join(_SETTINGS_DIR, "applications")
 WINDOWS_RUN_VALUES = {}
+app._get_windows_run_value = WINDOWS_RUN_VALUES.get
 app._set_windows_run_value = lambda name, value: (WINDOWS_RUN_VALUES.pop(name, None) if value is None
                                                   else WINDOWS_RUN_VALUES.__setitem__(name, value))
+WINDOWS_APP_ID_VALUES = {}
+app._set_windows_app_id = WINDOWS_APP_ID_VALUES.update
 REAL_NOTIFY = app.notify
 app.notify = lambda title, body, platform=None, run=None: False
+# A window opened by a test puts no icon in the real tray and leaves no start-up item.
+app.TRAY_ALLOWED = False
 # A window opened by a test does not ask the computer for its light or dark setting.
 REAL_SYSTEM_PREFERS_DARK = app.system_prefers_dark
 app.system_prefers_dark = lambda platform=None, run=None, env=None: False

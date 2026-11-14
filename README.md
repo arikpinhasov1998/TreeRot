@@ -45,6 +45,7 @@ away a box that still has a toy someone is playing with.
 * [Every button in the window](#every-button-in-the-window)
 * [Save a report](#save-a-report)
 * [Background scans](#run-in-background)
+* [TreeRot stays open in the tray](#treerot-stays-open-in-the-tray)
 * [Recipes: common jobs](#recipes-common-jobs)
 * [Command line (for servers and scripts)](#command-line-for-servers-and-scripts)
 * [When something goes wrong](#when-something-goes-wrong)
@@ -134,9 +135,11 @@ common system folders** to skip them all at once. More on this in
 [Exclude folders](#exclude-folders).
 
 **Step 4. Click Scan.**
-A green bar fills up. Under it you can see how many folders and files TreeRot has looked at, how
-long it has been running and about how much time is left. Big network shares can take a long
-time (minutes or even hours). You can click **Cancel** at any time.
+First the bar slides back and forth: TreeRot is checking the folder (and counting, if **Count
+first** is ticked), so it cannot tell yet how long it will take. Then the bar starts filling up.
+Under it you can see how many folders and files TreeRot has looked at, how long it has been
+running and about how much time is left. Big network shares can take a long time (minutes or
+even hours). You can click **Cancel** at any time.
 
 **Step 5. Look at the colors.**
 When the scan is done, you see your folder as a tree, each folder in green, red or gray, with
@@ -269,7 +272,7 @@ How TreeRot knows what your computer uses, when you choose **System**:
 |---|---|
 | Windows 10 / 11 | **Settings > Personalization > Colors > Choose your app mode**. In dark mode the window's title bar turns dark too. |
 | macOS | **System Settings > Appearance**. The Mac draws TreeRot's buttons and lists in its own light or dark style. |
-| Linux | The desktop's dark style setting (GNOME and most others), the name of the GTK theme (for example `Adwaita-dark`), or KDE's color scheme. If none of these says dark, TreeRot uses light. |
+| Linux | The desktop's own dark style setting (asked through the standard desktop settings service, which GNOME, KDE and most others answer), then the name of the GTK theme (for example `Yaru-dark`), then KDE's color scheme. If none of these says dark, TreeRot uses light. This works also when TreeRot is started from another program, such as PyCharm. |
 
 Some parts are drawn by the computer itself and follow the computer, not TreeRot: the
 **Browse** and **Save** windows and message boxes on Windows and macOS.
@@ -287,6 +290,39 @@ still turn off; that's fine.
 
 It cannot stop a person closing a laptop lid, choosing Sleep, or shutting down. If the computer
 sleeps anyway, the scan pauses until it wakes up.
+
+### TreeRot stays open in the tray
+
+When you close the TreeRot window, TreeRot **keeps running**, like a small helper that is always
+there. Its icon stays in the **tray**:
+
+| System | Where the icon is |
+|---|---|
+| Windows | The notification area, at the right end of the taskbar (it may be behind the **^** arrow). |
+| macOS | The menu bar, at the top right of the screen. |
+| Linux | The tray or top bar. On Ubuntu it is at the top right. Other GNOME systems need the "AppIndicator and KStatusNotifierItem Support" extension; KDE, Xfce, Cinnamon and MATE have a tray already. |
+
+It works the same everywhere:
+
+* **Click the icon** to open the window again.
+* **Right-click the icon** (on a Mac: right-click or Control-click) for its menu:
+  * **Open TreeRot**
+  * **Background scans**: opens the list of background scans.
+  * **Start with my computer**: when ticked, TreeRot starts by itself when you log in, with
+    only its icon showing. Untick it to stop that. It uses your own account only (no
+    administrator): a `TreeRot` value under
+    `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` on Windows,
+    `~/.config/autostart/treerot-startup.desktop` on Linux, or
+    `~/Library/LaunchAgents/io.github.arikpinhasov1998.treerot.plist` on macOS.
+  * **Quit TreeRot**: really closes TreeRot. A scan running in the window stops;
+    background scans keep going.
+* A scan running in the window **keeps going** while the window is hidden.
+* The first time you close the window, a notification reminds you where the icon is.
+* **Starting TreeRot again** while it is running opens the window that is already there,
+  instead of a second TreeRot. (The running TreeRot listens for this on your own computer
+  only, and the file `.treerot/instance.json` in your home folder tells the second start
+  where to find it.)
+* If your desktop has no tray at all, closing the window quits TreeRot, as before.
 
 ### Where TreeRot keeps your settings
 
@@ -364,7 +400,8 @@ rights, no password and no installation** are needed: the scan runs as you, unde
 
 | What happens | Scan in the window | Run in background |
 |---|---|---|
-| Closing the TreeRot window | Stops | Keeps running |
+| Closing the TreeRot window | Keeps running: TreeRot stays in the tray (stops if your desktop has no tray) | Keeps running |
+| **Quit TreeRot** in the tray menu | Stops | Keeps running |
 | Locking the screen, closing the RDP window (disconnect) | Keeps running | Keeps running |
 | Logging off, **Windows** | Stops | Stops |
 | Logging out, **macOS** | Stops | Stops |
@@ -404,8 +441,33 @@ afterwards:
 It runs `TreeRot --login-check` from where the program was when the scan started. If you move or
 delete the program in the meantime, the login item simply does nothing, and it is safe to delete.
 
+**The TreeRot logo on notifications.** Notifications show the TreeRot logo:
+
+* **Windows:** the notification says **TreeRot** with its logo. For that, TreeRot writes its name
+  and logo once under `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\io.github.arikpinhasov1998.TreeRot`
+  (your own account, no administrator). If that cannot be written, the notification still comes,
+  labeled "Windows PowerShell".
+* **Linux:** the logo appears next to the text.
+* **macOS:** the Mac shows the icon of the program that sends the notification, which is the
+  built-in Script Editor. The text says TreeRot.
+
+The logo file they use is `.treerot/treerot.png` in your home folder. TreeRot writes it again
+whenever it is missing.
+
+**The TreeRot logo in the taskbar or dock.**
+
+* **Windows:** the taskbar shows the logo, also when you run `treerot.py` with Python.
+* **macOS:** the Dock shows the logo.
+* **Linux:** desktops such as GNOME and KDE show a window's logo in the dock or taskbar only
+  when a launcher entry matches the window. Otherwise they show a plain gear. So each time
+  TreeRot opens, it makes sure a **hidden** entry exists at
+  `~/.local/share/applications/treerot.desktop` (your own account,
+  no administrator). It does not add TreeRot to your app menu. The first time, and after you
+  move the program, the window disappears and comes back once, a second after it opens, so the
+  dock picks up the logo. It is safe to delete.
+
 **Where TreeRot keeps its records.** A small record of each background scan sits in
-`.treerot/jobs` in your home folder, and each scan writes its progress next to the report
+`.treerot/jobs` in your home folder (next to the logo file `.treerot/treerot.png`), and each scan writes its progress next to the report
 (`<report>.status.json`). Removing a scan in **Background scans** deletes its record but keeps
 the report and its status file.
 
@@ -637,6 +699,26 @@ step says what should happen. Use a test folder first, and a **standard (non-adm
     readable.*
 16. Set it to **System**, then switch the computer between light and dark mode. *TreeRot
     follows within a few seconds.*
+
+**F. The logo**
+
+17. *Windows:* start `TreeRot.exe`. *The taskbar button, the window's corner and every dialog
+    show the TreeRot logo.* Finish a background scan: *the notification says **TreeRot** and
+    shows the logo.*
+18. *Every system:* open an HTML report in a browser. *The browser tab shows the logo.*
+
+**G. The tray (every system)**
+
+19. Close the TreeRot window. *The window goes away, the TreeRot icon stays in the tray (menu
+    bar on a Mac), and a notification says so the first time.* Click the icon: *the window
+    comes back.*
+20. Right-click the icon. *A menu with Open TreeRot, Background scans, Start with my computer
+    and Quit TreeRot appears and closes again when you click elsewhere.* Choose **Quit
+    TreeRot**: *the icon goes away.*
+21. Tick **Start with my computer**, log off and on. *TreeRot starts with only its icon
+    showing.* Untick it, log off and on: *it does not start.*
+22. With TreeRot open, start it again. *The open window comes to the front; no second icon
+    appears.*
 
 ---
 
