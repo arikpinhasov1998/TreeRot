@@ -1321,6 +1321,7 @@ class DialogsFitTheirContent(GuiCase):
             seen = {}
 
             def check(w):
+                w.settings["report_format"] = "html"     # an earlier test may have saved PDF
                 with mock.patch.object(app, "find_browser", return_value="/usr/bin/chromium"):
                     w._export_report()
                 win = [c for c in w.winfo_children() if c.winfo_class() == "Toplevel"][-1]

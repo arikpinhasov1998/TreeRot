@@ -45,6 +45,7 @@ import fnmatch
 import json
 import ntpath
 import os
+import posixpath
 import queue
 import re
 import shutil
@@ -234,7 +235,7 @@ def virtual_mounts(mountinfo=None):
         left, sep, right = line.partition(" - ")
         fields, rest = left.split(), right.split()
         if sep and len(fields) >= 5 and rest and rest[0] in VIRTUAL_FS_TYPES:
-            out.add(os.path.normpath(_unescape_mount(fields[4])))
+            out.add(posixpath.normpath(_unescape_mount(fields[4])))   # always a Linux path
     return out
 
 
@@ -1312,7 +1313,8 @@ def is_file_manager_share(path, platform=None):
     the desktop session, so it disappears at logout and a scan of it stops there."""
     if not (platform or sys.platform).startswith("linux"):
         return False
-    return re.match(r"/run/user/\d+/gvfs/", os.path.abspath(path) + "/") is not None
+    full = path if path.startswith("/") else os.path.abspath(path)
+    return re.match(r"/run/user/\d+/gvfs/", posixpath.normpath(full) + "/") is not None
 
 
 def _full_path(path):
@@ -1551,11 +1553,12 @@ def _linux_notify_env(run):
     """The environment to reach the desktop's notification service, or None when nobody is
     logged in to a desktop (it is then shown at the next login)."""
     env = dict(os.environ)
+    uid = os.getuid() if hasattr(os, "getuid") else 0     # Linux only; tests run it anywhere
     if shutil.which("loginctl"):
-        res = run(["loginctl", "show-user", str(os.getuid()), "--property=Display", "--value"])
+        res = run(["loginctl", "show-user", str(uid), "--property=Display", "--value"])
         if res.returncode == 0 and not _out(res):
             return None                  # no graphical session right now
-        bus = f"/run/user/{os.getuid()}/bus"
+        bus = f"/run/user/{uid}/bus"
         if not env.get("DBUS_SESSION_BUS_ADDRESS") and os.path.exists(bus):
             env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
     elif not env.get("DBUS_SESSION_BUS_ADDRESS"):
@@ -2459,9 +2462,10 @@ class InstanceServer:
                 pass
             try:                             # only our own file: a newer TreeRot may own it
                 with open(self.path, encoding="utf-8") as f:
-                    if json.load(f).get("token") == self.token:
-                        os.remove(self.path)
-            except (OSError, ValueError):
+                    ours = json.load(f).get("token") == self.token
+                if ours:                         # closed first: Windows cannot delete open files
+                    os.remove(self.path)
+            except (OSError, ValueError, AttributeError):
                 pass
 
 

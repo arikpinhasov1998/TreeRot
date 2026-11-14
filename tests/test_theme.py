@@ -98,7 +98,8 @@ class Window(GuiCase):
                 red = str(w.tree.tag_configure(app.RED, "background"))
                 self.assertEqual(red, dark["tint"][app.RED])
                 self.assertEqual(str(w.sum_boxes[app.GREEN].cget("bg")), dark["tint"][app.GREEN])
-                self.assertEqual(str(w.ex_list.cget("bg")), dark["field"])
+                if w._native_theme != "aqua":        # macOS draws this list itself
+                    self.assertEqual(str(w.ex_list.cget("bg")), dark["field"])
                 self.assertEqual(app.load_settings()["theme"], "Dark")
                 w._set_theme("Light")
                 light = app.PALETTES["light"]
