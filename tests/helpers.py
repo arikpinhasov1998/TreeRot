@@ -25,6 +25,9 @@ app._set_windows_run_value = lambda name, value: (WINDOWS_RUN_VALUES.pop(name, N
                                                   else WINDOWS_RUN_VALUES.__setitem__(name, value))
 REAL_NOTIFY = app.notify
 app.notify = lambda title, body, platform=None, run=None: False
+# A window opened by a test does not ask the computer for its light or dark setting.
+REAL_SYSTEM_PREFERS_DARK = app.system_prefers_dark
+app.system_prefers_dark = lambda platform=None, run=None, env=None: False
 
 OLD = datetime(2019, 1, 1).timestamp()
 NEW = datetime(2026, 1, 1).timestamp()

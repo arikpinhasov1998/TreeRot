@@ -1039,6 +1039,126 @@ def write_csv(path, rows):
 
 BG = {GREEN: "#c9eccf", RED: "#f6c4c4", GRAY: "#e6e6e6"}
 DUMMY = "::__placeholder__"
+
+# ---- light and dark appearance
+THEME_CHOICES = ("System", "Light", "Dark")    # "System" follows the computer's own setting
+THEME_POLL_MS = 3000                           # how often "System" checks for a change
+PALETTES = {
+    "light": {
+        "bg": "#f0f0f0", "field": "#ffffff", "fg": "#1e1e1e", "muted": "#666666",
+        "border": "#b4b4b4", "button": "#e3e3e3", "button_active": "#d5d5d5",
+        "pressed": "#c6c6c6", "heading": "#e3e3e3", "select_bg": "#2f6fb6",
+        "select_fg": "#ffffff", "trough": "#dcdcdc", "accent": "#2f6fb6",
+        "disabled": "#9a9a9a", "tip_bg": "#ffffe0", "tip_fg": "#000000",
+        "tint": dict(BG), "tint_fg": "#000000",
+    },
+    "dark": {
+        "bg": "#202124", "field": "#2b2c30", "fg": "#e6e6e6", "muted": "#a3a7ac",
+        "border": "#4a4c51", "button": "#34363b", "button_active": "#3f4147",
+        "pressed": "#4b4d54", "heading": "#2f3135", "select_bg": "#3d6fb0",
+        "select_fg": "#ffffff", "trough": "#2a2b2e", "accent": "#5b97e0",
+        "disabled": "#70747a", "tip_bg": "#3a3b40", "tip_fg": "#f0f0f0",
+        "tint": {GREEN: "#1f4a2c", RED: "#5c2727", GRAY: "#3b3d41"}, "tint_fg": "#ececec",
+    },
+}
+
+
+def theme_choice(value):
+    """The saved appearance choice, or "System" for anything unknown."""
+    for c in THEME_CHOICES:
+        if str(value).strip().lower() == c.lower():
+            return c
+    return "System"
+
+
+def resolve_theme(choice, system_dark):
+    """"light" or "dark" for a choice; "System" goes by the computer (light when unknown)."""
+    choice = theme_choice(choice)
+    if choice == "System":
+        return "dark" if system_dark else "light"
+    return choice.lower()
+
+
+def _windows_prefers_dark():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion"
+                            r"\Themes\Personalize") as k:
+            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
+    except (OSError, ImportError):
+        return None
+
+
+def _kde_prefers_dark(env):
+    path = os.path.join(env.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"),
+                                                                    ".config"), "kdeglobals")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            section = ""
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    section = line
+                elif section == "[General]" and line.startswith("ColorScheme="):
+                    return "dark" in line.lower()
+    except OSError:
+        pass
+    return None
+
+
+def system_prefers_dark(platform=None, run=None, env=None):
+    """True when the computer is set to a dark appearance, False for light, None when it cannot
+    tell. Windows: the apps setting in Personalization; macOS: Appearance; Linux: the GNOME or
+    freedesktop color scheme, the GTK theme name, or KDE's color scheme."""
+    platform = platform or sys.platform
+    run = run or (lambda cmd: _run_tool(cmd, timeout=2))
+    env = os.environ if env is None else env
+    if platform == "win32":
+        return _windows_prefers_dark()
+    if platform == "darwin":
+        res = run(["defaults", "read", "-g", "AppleInterfaceStyle"])
+        if res.returncode == -1:
+            return None
+        return _out(res).lower() == "dark"       # the key is missing in light mode
+    gtk = env.get("GTK_THEME", "")
+    if gtk:
+        return "dark" in gtk.lower()
+    answered = False
+    res = run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"])
+    if res.returncode == 0:
+        answered = True
+        scheme = _out(res).lower()
+        if "prefer-dark" in scheme:
+            return True
+        if "prefer-light" in scheme:
+            return False
+    res = run(["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"])
+    if res.returncode == 0:
+        answered = True
+        if "dark" in _out(res).lower():
+            return True
+    kde = _kde_prefers_dark(env)
+    if kde is not None:
+        return kde
+    return False if answered else None
+
+
+def windows_dark_title_bar(hwnd, dark):
+    """Asks Windows 10 (20H1+) and 11 to draw a window's title bar dark or light. Older Windows
+    ignores it."""
+    try:
+        import ctypes
+        value = ctypes.c_int(1 if dark else 0)
+        dwm = ctypes.windll.dwmapi
+        for attribute in (20, 19):              # DWMWA_USE_IMMERSIVE_DARK_MODE, before 20H1
+            if dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value),
+                                         ctypes.sizeof(value)) == 0:
+                break
+        # SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED: redraw the frame now
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x1 | 0x2 | 0x4 | 0x10 | 0x20)
+        return True
+    except Exception:
+        return False
 def icon_pixels():
     """(width, height, [(r, g, b, a), ...]) of the logo, for a Tk that cannot read PNG itself.
     Reads only the form the logo is written in: 8-bit RGBA with no row filters."""
@@ -2086,8 +2206,14 @@ def run_gui(preload=None, on_ready=None):
             self._bg_starting = False # a background scan is being started
             self._jobs_ui = None      # the Background scans panel, while it is open
             self._jobs_gen = 0
+            self.theme_var = tk.StringVar(value=theme_choice(self.settings.get("theme")))
+            self._system_dark = system_prefers_dark()
+            self._theme_checking = False
+            self.theme_mode = None    # "light" or "dark", once applied
+            self._native_theme = ttk.Style(self).theme_use()
 
             self._build_ui()
+            self._apply_theme()
             self._fit_main_window()
             self.path_var.set(self.settings.get("path", ""))
             self._quick_period("Last 2 years")
@@ -2096,6 +2222,7 @@ def run_gui(preload=None, on_ready=None):
             self.protocol("WM_DELETE_WINDOW", self._on_close)
             self._clear_summary()
             self._poll_job = self.after(100, self._poll)
+            self._theme_job = self.after(THEME_POLL_MS, self._check_system_theme)
             if background_available():
                 self._clean_finished_jobs()
 
@@ -2131,7 +2258,7 @@ def run_gui(preload=None, on_ready=None):
             self.symlink_var = tk.BooleanVar(value=False)
             ttk.Checkbutton(opts, text="Follow symlinks (risk of loops)",
                             variable=self.symlink_var).pack(side="left", padx=16)
-            ttk.Label(top, foreground="#666666",
+            ttk.Label(top, style="Hint.TLabel",
                       text="YYYY-MM-DD; leave 'To' empty for no end date. Green = a file inside "
                            "was modified or created in the period, even if the folder wasn't touched."
                       ).grid(row=2, column=1, columnspan=2, sticky="w", padx=6)
@@ -2198,10 +2325,12 @@ def run_gui(preload=None, on_ready=None):
             # legend
             leg = ttk.Frame(button_row)
             leg.pack(side="right")
+            self._legend = {}
             for txt, col in (("Used in period", GREEN), ("NOT used", RED),
                              ("Empty / error", GRAY)):
-                tk.Label(leg, text=f"  {txt}  ", bg=BG[col], relief="solid", bd=1
-                         ).pack(side="left", padx=3)
+                self._legend[col] = tk.Label(leg, text=f"  {txt}  ", bg=BG[col], relief="solid",
+                                             bd=1)
+                self._legend[col].pack(side="left", padx=3)
 
             prog = ttk.Frame(self, padding=(8, 6, 8, 0))
             prog.pack(fill="x")
@@ -2258,6 +2387,12 @@ def run_gui(preload=None, on_ready=None):
             self.levels_cb.pack(side="left")
             self.levels_cb.bind("<<ComboboxSelected>>",
                                 lambda e: self._show_levels(self.levels_var.get()))
+            self.theme_cb = ttk.Combobox(opt3, textvariable=self.theme_var, state="readonly",
+                                         width=8, values=list(THEME_CHOICES))
+            self.theme_cb.pack(side="right")
+            ttk.Label(opt3, text="Appearance:").pack(side="right", padx=(14, 4))
+            self.theme_cb.bind("<<ComboboxSelected>>",
+                               lambda e: self._set_theme(self.theme_var.get()))
 
             sum_frame = ttk.Frame(self, padding=(8, 8, 8, 4))
             sum_frame.pack(fill="x")
@@ -2352,6 +2487,7 @@ def run_gui(preload=None, on_ready=None):
             st = {"y": cur.year, "m": cur.month}
             win = tk.Toplevel(self)
             win.title("Pick a date")
+            self._theme_window(win)
             win.transient(self)
             head = ttk.Frame(win)
             head.pack(fill="x", padx=6, pady=(6, 2))
@@ -2433,6 +2569,7 @@ def run_gui(preload=None, on_ready=None):
                 "excludes": list(self.ex_list.get(0, "end")),
                 "precount": bool(self.precount_var.get()),
                 "count_created": bool(self.created_var.get()),
+                "theme": theme_choice(self.theme_var.get()),
             })
             if self._settings_savable:     # never over settings that could not be read
                 save_settings(self.settings)
@@ -2456,11 +2593,194 @@ def run_gui(preload=None, on_ready=None):
                 pass
             self._end_report()           # the browser must not outlive the window
             self._end_scan()
-            try:                         # no stray callback may fire into a dead interpreter
-                self.after_cancel(self._poll_job)
-            except (tk.TclError, AttributeError):
-                pass
+            for job in ("_poll_job", "_theme_job"):  # no stray callback into a dead interpreter
+                try:
+                    self.after_cancel(getattr(self, job))
+                except (tk.TclError, AttributeError):
+                    pass
             super().destroy()
+
+        # ---- light and dark appearance
+        def _set_theme(self, choice):
+            self.theme_var.set(theme_choice(choice))
+            self._apply_theme()
+            self._save_settings()
+
+        def _check_system_theme(self):
+            """While "System" is chosen, looks every few seconds whether the computer switched
+            between light and dark. The check runs off the Tk thread: it may start a program."""
+            self._theme_job = self.after(THEME_POLL_MS, self._check_system_theme)
+            if self._theme_checking or theme_choice(self.theme_var.get()) != "System":
+                return
+            self._theme_checking = True
+
+            def check():
+                try:
+                    dark = system_prefers_dark()
+                except Exception:           # a broken check keeps the current look
+                    dark = self._system_dark
+                self.q.put(("system_theme", dark))
+            threading.Thread(target=check, daemon=True).start()
+
+        def _apply_theme(self):
+            mode = resolve_theme(self.theme_var.get(), self._system_dark)
+            p = PALETTES[mode]
+            self.theme_mode = mode
+            style = ttk.Style(self)
+            aqua = self._native_theme == "aqua"
+            if aqua:                        # macOS draws its own widgets light or dark
+                self._mac_appearance(self)
+            elif mode == "dark" or sys.platform not in ("win32", "cygwin"):
+                style.theme_use("clam")    # the only built-in theme that takes every color
+                self._style_clam(style, p)
+            else:
+                style.theme_use(self._native_theme)
+            style.configure("Hint.TLabel", foreground=p["muted"])
+            self._classic_colors(p, aqua)
+            self.configure(bg=p["bg"])
+            for col in (GREEN, RED, GRAY):
+                tint = p["tint"][col]
+                self.tree.tag_configure(col, background=tint, foreground=p["tint_fg"])
+                self._legend[col].configure(bg=tint, fg=p["tint_fg"])
+                self.sum_boxes[col].configure(bg=tint, fg=p["tint_fg"])
+            if not aqua:
+                for w in (self.ex_list,):
+                    w.configure(bg=p["field"], fg=p["fg"], selectbackground=p["select_bg"],
+                                selectforeground=p["select_fg"], highlightbackground=p["border"],
+                                highlightcolor=p["accent"])
+                self.menu.configure(bg=p["field"], fg=p["fg"], activebackground=p["select_bg"],
+                                    activeforeground=p["select_fg"])
+            self._theme_window(self)
+            for w in self.winfo_children():
+                if isinstance(w, tk.Toplevel):
+                    self._theme_window(w)
+            self._recolor_popdowns(self, p)
+
+        def _style_clam(self, style, p):
+            try:                          # clam sizes rows and marks in pixels: follow the font
+                from tkinter import font as tkfont
+                line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+            except (tk.TclError, ImportError):
+                line = 16
+            mark = max(10, round(line * 0.45))
+            style.configure("Treeview", rowheight=line + 4)
+            style.configure("TCheckbutton", indicatorsize=mark)
+            style.configure("TRadiobutton", indicatorsize=mark)
+            for name in ("TCombobox", "TSpinbox", "TScrollbar"):
+                style.configure(name, arrowsize=max(12, round(line * 0.5)))
+            style.configure(".", background=p["bg"], foreground=p["fg"], fieldbackground=p["field"],
+                            troughcolor=p["trough"], bordercolor=p["border"],
+                            lightcolor=p["bg"], darkcolor=p["bg"], focuscolor=p["accent"],
+                            selectbackground=p["select_bg"], selectforeground=p["select_fg"],
+                            insertcolor=p["fg"], arrowcolor=p["fg"])
+            style.map(".", foreground=[("disabled", p["disabled"])],
+                      background=[("disabled", p["bg"])])
+            style.configure("TButton", background=p["button"], lightcolor=p["button"],
+                            darkcolor=p["button"], bordercolor=p["border"])
+            style.map("TButton",
+                      background=[("disabled", p["bg"]), ("pressed", p["pressed"]),
+                                  ("active", p["button_active"])],
+                      lightcolor=[("pressed", p["pressed"]), ("active", p["button_active"])],
+                      darkcolor=[("pressed", p["pressed"]), ("active", p["button_active"])])
+            for name in ("TEntry", "TCombobox", "TSpinbox"):
+                style.configure(name, fieldbackground=p["field"], foreground=p["fg"],
+                                background=p["button"], arrowcolor=p["fg"],
+                                lightcolor=p["field"], darkcolor=p["field"],
+                                bordercolor=p["border"])
+                style.map(name,
+                          fieldbackground=[("disabled", p["bg"]), ("readonly", p["field"])],
+                          foreground=[("disabled", p["disabled"])],
+                          background=[("active", p["button_active"]),
+                                      ("pressed", p["pressed"])],
+                          selectbackground=[("!focus", p["field"])],
+                          selectforeground=[("!focus", p["fg"])],
+                          bordercolor=[("focus", p["accent"])],
+                          lightcolor=[("focus", p["field"])])
+            for name in ("TCheckbutton", "TRadiobutton"):
+                style.configure(name, background=p["bg"], foreground=p["fg"],
+                                indicatorbackground=p["field"], indicatorforeground=p["fg"],
+                                upperbordercolor=p["border"], lowerbordercolor=p["border"])
+                style.map(name, background=[("active", p["bg"])],
+                          indicatorbackground=[("disabled", p["bg"]), ("pressed", p["pressed"]),
+                                               ("selected", p["field"])])
+            style.configure("TLabelframe", background=p["bg"], bordercolor=p["border"],
+                            lightcolor=p["bg"], darkcolor=p["bg"])
+            style.configure("TLabelframe.Label", background=p["bg"], foreground=p["fg"])
+            style.configure("Treeview", background=p["field"], fieldbackground=p["field"],
+                            foreground=p["fg"], bordercolor=p["border"])
+            style.map("Treeview", background=[("selected", p["select_bg"])],
+                      foreground=[("selected", p["select_fg"])])
+            style.configure("Treeview.Heading", background=p["heading"], foreground=p["fg"],
+                            lightcolor=p["heading"], darkcolor=p["heading"],
+                            bordercolor=p["border"])
+            style.map("Treeview.Heading", background=[("active", p["button_active"])])
+            style.configure("TScrollbar", background=p["button"], troughcolor=p["trough"],
+                            bordercolor=p["border"], arrowcolor=p["fg"],
+                            lightcolor=p["button"], darkcolor=p["button"])
+            style.map("TScrollbar", background=[("active", p["button_active"]),
+                                                ("disabled", p["trough"])])
+            style.configure("TProgressbar", background=p["accent"], troughcolor=p["trough"],
+                            bordercolor=p["border"], lightcolor=p["accent"],
+                            darkcolor=p["accent"])
+
+        def _classic_colors(self, p, aqua):
+            """Colors for classic Tk widgets created from now on: Tk's own dialogs on Linux and
+            the lists that drop down from a choice box."""
+            pairs = [("*TCombobox*Listbox.background", p["field"]),
+                     ("*TCombobox*Listbox.foreground", p["fg"]),
+                     ("*TCombobox*Listbox.selectBackground", p["select_bg"]),
+                     ("*TCombobox*Listbox.selectForeground", p["select_fg"])]
+            if not aqua:
+                pairs += [("*Background", p["bg"]), ("*Foreground", p["fg"]),
+                          ("*activeBackground", p["button_active"]),
+                          ("*activeForeground", p["fg"]),
+                          ("*selectBackground", p["select_bg"]),
+                          ("*selectForeground", p["select_fg"]),
+                          ("*insertBackground", p["fg"]),
+                          ("*highlightBackground", p["bg"]),
+                          ("*troughColor", p["trough"]),
+                          ("*Listbox.background", p["field"]),
+                          ("*Entry.background", p["field"]),
+                          ("*Text.background", p["field"])]
+            for pattern, value in pairs:
+                self.option_add(pattern, value)
+
+        def _recolor_popdowns(self, widget, p):
+            """The list under a choice box is made once and keeps its colors: repaint it."""
+            for w in widget.winfo_children():
+                if isinstance(w, ttk.Combobox):
+                    try:
+                        pd = w.tk.eval(f"ttk::combobox::PopdownWindow {w}")
+                        w.tk.call(f"{pd}.f.l", "configure", "-background", p["field"],
+                                  "-foreground", p["fg"], "-selectbackground", p["select_bg"],
+                                  "-selectforeground", p["select_fg"])
+                    except tk.TclError:
+                        pass
+                self._recolor_popdowns(w, p)
+
+        def _mac_appearance(self, win):
+            name = {"Light": "aqua", "Dark": "darkaqua"}.get(theme_choice(self.theme_var.get()),
+                                                             "auto")
+            try:
+                self.tk.call("::tk::unsupported::MacWindowStyle", "appearance", win, name)
+            except tk.TclError:             # Tk before 8.6.10: the window follows macOS
+                pass
+
+        def _theme_window(self, win):
+            """Colors a window (the main one or a dialog) for the current appearance. Every new
+            dialog calls this once it is made."""
+            p = PALETTES[self.theme_mode or "light"]
+            try:
+                if win is not self:
+                    win.configure(bg=p["bg"])
+                if self._native_theme == "aqua":
+                    self._mac_appearance(win)
+                elif sys.platform == "win32":
+                    win.update_idletasks()
+                    hwnd = int(win.wm_frame(), 16) if win.wm_frame() else 0
+                    windows_dark_title_bar(hwnd or win.winfo_id(), self.theme_mode == "dark")
+            except (tk.TclError, ValueError):
+                pass
 
         def _end_scan(self):
             """A scan still running when the window closes is canceled, and the computer is let
@@ -2656,6 +2976,12 @@ def run_gui(preload=None, on_ready=None):
                 self._poll_job = self.after(100, self._poll)
 
         def _handle_msg(self, msg):
+            if msg[0] == "system_theme":
+                self._theme_checking = False
+                if msg[1] != self._system_dark:
+                    self._system_dark = msg[1]
+                    self._apply_theme()
+                return
             if msg[0] == "progress":
                 p = msg[1]
                 v = self.meter.update(p)
@@ -3237,8 +3563,9 @@ def run_gui(preload=None, on_ready=None):
                 tw.attributes("-topmost", True)
             except tk.TclError:
                 pass
-            tk.Label(tw, text=text, justify="left", background="#ffffe0", foreground="black",
-                     relief="solid", borderwidth=1, wraplength=560, padx=8, pady=5
+            tip = PALETTES[self.theme_mode or "light"]
+            tk.Label(tw, text=text, justify="left", background=tip["tip_bg"],
+                     foreground=tip["tip_fg"], relief="solid", borderwidth=1, wraplength=560, padx=8, pady=5
                      ).pack()
             tw.update_idletasks()
             w, h = tw.winfo_reqwidth(), tw.winfo_reqheight()
@@ -3284,6 +3611,7 @@ def run_gui(preload=None, on_ready=None):
                 return
             win = tk.Toplevel(self)
             win.title("Export report")
+            self._theme_window(win)
             win.transient(self)
             frm = ttk.Frame(win, padding=16)
             frm.pack(fill="both", expand=True)
@@ -3328,7 +3656,7 @@ def run_gui(preload=None, on_ready=None):
                                     text="The path to every unused folder")
             rb_un.grid(row=6, column=0, columnspan=2, sticky="w", padx=(40, 0), pady=(2, 0))
             est_var = tk.StringVar(value="")
-            ttk.Label(frm, textvariable=est_var, foreground="#666666", wraplength=460,
+            ttk.Label(frm, textvariable=est_var, style="Hint.TLabel", wraplength=460,
                       justify="left").grid(row=7, column=0, columnspan=2, sticky="w",
                                            padx=(40, 0), pady=(6, 0))
             if browser:
@@ -3337,7 +3665,7 @@ def run_gui(preload=None, on_ready=None):
                 pdf_rb.state(["disabled"])
                 hint = ("PDF needs Microsoft Edge, Google Chrome, Chromium or Brave,\n"
                         "and none was found on this computer.")
-            ttk.Label(frm, text=hint, foreground="#666666").grid(
+            ttk.Label(frm, text=hint, style="Hint.TLabel").grid(
                 row=8, column=0, columnspan=2, sticky="w", padx=(22, 0), pady=(10, 0))
 
             def current_tree():
@@ -3579,6 +3907,7 @@ def run_gui(preload=None, on_ready=None):
                 return
             win = tk.Toplevel(self)
             win.title("Background scans")
+            self._theme_window(win)
             sw, sh = self._screen_box(win)
             win.geometry(f"{min(900, sw)}x{min(340, sh)}")
             win.minsize(min(500, sw), min(220, sh))
@@ -3828,6 +4157,7 @@ def run_gui(preload=None, on_ready=None):
         def _about(self):
             win = tk.Toplevel(self)
             win.title(f"About {APP_NAME}")
+            self._theme_window(win)
             win.transient(self)
             frm = ttk.Frame(win, padding=20)
             frm.pack(fill="both", expand=True)
