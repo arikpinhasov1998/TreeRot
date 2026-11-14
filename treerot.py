@@ -1109,18 +1109,31 @@ TASK_RESULT_WORDS = {
     0x80070002: "Windows could not find the program the task should run",
     0x00041306: "The task was stopped",
 }
-JOB_OVER = ("finished", "failed", "ended")      # no process left: the task is only a stored password
+JOB_OVER = ("finished", "failed", "ended", "stopped")   # no process left
 CREATING_LIMIT_SECONDS = 900            # a password prompt older than this was left or abandoned
 JOB_LABELS = {"creating": "Password", "starting": "Starting", "silent": "Not started", "running": "Running",
-              "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed"}
+              "stalled": "Stopped?", "ended": "Ended", "finished": "Finished", "failed": "Failed",
+              "stopped": "Stopped"}
+# Background scans run as the user's own process, so no step needs an administrator:
+#   "process" - a detached copy of this program (Windows, macOS, and Linux without systemd)
+#   "systemd" - a transient systemd user service (Linux); with "linger" it outlives logout
+#   "task"    - a Windows scheduled task holding a stored password, from versions before this
+#               one. None are created any more; old ones can still be followed and removed.
+UNIT_PREFIX = "treerot-"
+TOOL_TIMEOUT = 30                       # seconds for systemctl, loginctl, ps, notify-send...
+STOPPED_TEXT = ("The scan stopped before it finished: you logged off, the computer restarted, "
+                "or its process was ended.")
+# Next-login check: shows a notice nobody could see (the scan ended while you were logged
+# off, or logging off stopped it). Installed while a scan is unreported, removed after.
+LOGIN_CHECK_LABEL = "io.github.arikpinhasov1998.treerot.login-check"
+LOGIN_CHECK_NAME = "TreeRot login check"
+LOGIN_CHECK_DELAY = 20                  # seconds: let the desktop's notification service start
+AUTOSTART_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME")
+                             or os.path.join(os.path.expanduser("~"), ".config"), "autostart")
+LAUNCH_AGENTS_DIR = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
+WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+POWERSHELL_APP_ID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
 _JOB_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}\Z")
-# What XML 1.0 can carry, without line breaks: the task's command line has no way to hold them.
-_NOT_TASK_TEXT = re.compile("[^\t\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
-
-
-# Task Scheduler may expand these in a command line, which would silently change the value.
-_CMD_SPECIAL = re.compile('["%&^|<>\x00-\x1f]')    # what cmd.exe could read as something else
-_TASK_EXPANDS = re.compile(r"%[^%]+%|\$\([^)]*\)")
 
 
 class BackgroundError(Exception):
@@ -1128,32 +1141,23 @@ class BackgroundError(Exception):
 
 
 def background_available():
-    return sys.platform == "win32"
-
-
-def is_mapped_drive(path, drive_type=None):
-    """True for a drive letter that points at a network share. Those don't exist in a background task."""
-    if path[:4] in ("\\\\?\\", "\\\\.\\"):
-        path = path[4:]
-    if len(path) < 2 or path[1] != ":" or not path[0].isalpha():
-        return False
-    if drive_type is None:
-        if sys.platform != "win32":
-            return False
-        import ctypes
-        drive_type = ctypes.windll.kernel32.GetDriveTypeW
-    return drive_type(path[0].upper() + ":\\") == 4          # DRIVE_REMOTE
+    """Background scans run as your own process on every system: no administrator needed."""
+    return True
 
 
 def check_background_folder(root):
     """Why this folder can't be scanned in the background, or None. May be slow: not on the Tk thread."""
-    root = _full_path(root)              # "data" or "\\data" may be on a mapped current drive
-    if is_mapped_drive(root):
-        return ("Mapped drive letters do not exist in a background task. Enter the full network "
-                "path instead, for example \\\\server\\share.")
-    if not os.path.isdir(root):
+    if not os.path.isdir(_full_path(root)):
         return "That folder does not exist or is not reachable."
     return None
+
+
+def is_file_manager_share(path, platform=None):
+    """A share opened in the Linux file manager (GVfs, under /run/user/<uid>/gvfs). It belongs to
+    the desktop session, so it disappears at logout and a scan of it stops there."""
+    if not (platform or sys.platform).startswith("linux"):
+        return False
+    return re.match(r"/run/user/\d+/gvfs/", os.path.abspath(path) + "/") is not None
 
 
 def _full_path(path):
@@ -1191,68 +1195,389 @@ def background_args(date_from, date_to, excludes, created=True, follow_symlinks=
     return args
 
 
-def background_command(root, args, status_file):
-    """The program and arguments to run the shell version: the sibling CLI exe, or this script."""
+def self_command():
+    """How to start this program again: the frozen program itself, or Python with this script.
+    One file is enough: the windowed program runs the command line when given a folder."""
+    exe = sys.executable
+    if not exe or not os.path.isfile(exe):
+        raise BackgroundError("Could not find the program that is running TreeRot, so a "
+                              "background scan could not be started.")
     if getattr(sys, "frozen", False):
-        exe = os.path.join(os.path.dirname(sys.executable), "TreeRot-cli.exe")
-        if not os.path.isfile(exe):
-            raise BackgroundError(f"TreeRot-cli.exe must be in the same folder as TreeRot.exe ({exe}).")
-        prefix = []
+        return [exe]
+    if sys.platform == "win32":          # no console window for the background copy
+        windowless = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.isfile(windowless):
+            exe = windowless
+    return [exe, os.path.abspath(__file__)]
+
+
+def worker_command(root, args, status_file, job_id):
+    """The command line of a background scan."""
+    return self_command() + [root] + list(args) + [
+        "--progress", "none", "--status-file", status_file, "--job-id", job_id]
+
+
+def _run_tool(cmd, env=None, timeout=TOOL_TIMEOUT):
+    """Runs a system tool quietly. A tool that is missing or does not answer comes back as a
+    failure (return code -1), never as an exception."""
+    kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}    # CREATE_NO_WINDOW
+    try:
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env,
+                              timeout=timeout, **kw)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return subprocess.CompletedProcess(cmd, -1, b"", str(e).encode())
+
+
+def _out(res):
+    return (res.stdout or b"").decode("utf-8", "replace").strip()
+
+
+def _windows_kernel32():
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = (wintypes.HANDLE,)
+    k.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    k.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    return ctypes, wintypes, k
+
+
+def _windows_process_start(pid):
+    ctypes, wintypes, k = _windows_kernel32()
+    h = k.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        err = ctypes.get_last_error()
+        if err == 87:                                # ERROR_INVALID_PARAMETER: no such process
+            return None
+        raise OSError(err, "Windows would not tell whether the scan is running")
+    try:
+        code = wintypes.DWORD()
+        if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+            raise OSError(ctypes.get_last_error(), "Windows would not tell whether the scan is running")
+        if code.value != 259:                        # STILL_ACTIVE
+            return None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not k.GetProcessTimes(h, *[ctypes.byref(t) for t in times]):
+            raise OSError(ctypes.get_last_error(), "Windows would not tell when the scan started")
+        return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+    finally:
+        k.CloseHandle(h)
+
+
+def process_start(pid, platform=None, run=None):
+    """When process `pid` started, as the system words it, or None if no such process runs.
+    A PID is reused once its process is gone; with the start time it names one process only.
+    Raises OSError when it cannot be told."""
+    platform = platform or sys.platform
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            return None
+        fields = data[data.rfind(b")") + 2:].split()
+        if len(fields) < 20 or fields[0] in (b"Z", b"X"):     # a zombie has already ended
+            return None
+        return fields[19].decode()
+    if platform == "win32":
+        return _windows_process_start(pid)
+    res = (run or _run_tool)(["ps", "-o", "stat=", "-o", "lstart=", "-p", str(pid)])
+    text = _out(res)
+    if res.returncode == 1 and not text:                     # ps found no such process
+        return None
+    if res.returncode != 0:
+        raise OSError("ps could not tell whether the scan is running")
+    state, _, start = text.partition(" ")
+    return None if state.startswith("Z") else start.strip()
+
+
+def stop_process(pid, start, platform=None):
+    """Ends the scan's process, but only if it is still the one that was started. On Linux and
+    macOS it leads its own process group, so a browser printing its PDF ends with it."""
+    platform = platform or sys.platform
+    if start is None or process_start(pid, platform) != start:
+        return False
+    if platform == "win32":
+        ctypes, _, k = _windows_kernel32()
+        h = k.OpenProcess(0x0001, False, pid)        # PROCESS_TERMINATE
+        if not h:
+            raise OSError(ctypes.get_last_error(), "Windows would not end the scan")
+        try:
+            if not k.TerminateProcess(h, 1):
+                raise OSError(ctypes.get_last_error(), "Windows would not end the scan")
+        finally:
+            k.CloseHandle(h)
+        return True
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _spawn_detached(cmd, platform=None):
+    """Starts cmd so that it outlives this program and its window. Returns its PID."""
+    platform = platform or sys.platform
+    kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+          "stderr": subprocess.DEVNULL, "close_fds": True, "cwd": os.path.expanduser("~")}
+    if platform == "win32":
+        flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        try:                              # also leave any job object that would end it with us
+            proc = subprocess.Popen(cmd, creationflags=flags | 0x01000000, **kw)
+        except OSError:                   # the job object does not allow breaking away
+            proc = subprocess.Popen(cmd, creationflags=flags, **kw)
+        return proc.pid
+    proc = subprocess.Popen(cmd, start_new_session=True, **kw)
+    # Collect its exit while this program runs, so it does not linger as a zombie.
+    threading.Thread(target=proc.wait, name="background-reaper", daemon=True).start()
+    return proc.pid
+
+
+def systemd_user_available(run):
+    """A systemd user manager is there to run the scan as a service (most Linux desktops)."""
+    if not (shutil.which("systemd-run") and shutil.which("systemctl")):
+        return False
+    return run(["systemctl", "--user", "show-environment"]).returncode == 0
+
+
+def start_systemd_unit(unit, cmd, run):
+    return run(["systemd-run", "--user", "--unit", unit, "--collect", "--quiet",
+                "--description", f"{APP_NAME} background scan",
+                "--working-directory", os.path.expanduser("~"), "--"] + list(cmd)).returncode == 0
+
+
+def _user_name():
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
+def lingering(run):
+    user = _user_name()
+    if not user or not shutil.which("loginctl"):
+        return False
+    res = run(["loginctl", "show-user", user, "--property=Linger", "--value"])
+    return res.returncode == 0 and _out(res) == "yes"
+
+
+def ensure_linger(run):
+    """True if this user's services keep running after logout. Turns it on when it is off:
+    systemd lets you do that for your own account without an administrator on most systems."""
+    if lingering(run):
+        return True
+    if shutil.which("loginctl"):
+        run(["loginctl", "enable-linger"])
+    return lingering(run)
+
+
+def unit_alive(unit, run):
+    """True or False, or None if systemd could not be asked."""
+    res = run(["systemctl", "--user", "is-active", unit])
+    state = _out(res)
+    if state in ("active", "activating", "deactivating", "reloading"):
+        return True
+    if state in ("inactive", "failed"):
+        return False
+    return None
+
+
+# ---- desktop notifications
+
+def _linux_notify_env(run):
+    """The environment to reach the desktop's notification service, or None when nobody is
+    logged in to a desktop (it is then shown at the next login)."""
+    env = dict(os.environ)
+    if shutil.which("loginctl"):
+        res = run(["loginctl", "show-user", str(os.getuid()), "--property=Display", "--value"])
+        if res.returncode == 0 and not _out(res):
+            return None                  # no graphical session right now
+        bus = f"/run/user/{os.getuid()}/bus"
+        if not env.get("DBUS_SESSION_BUS_ADDRESS") and os.path.exists(bus):
+            env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
+    elif not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return None
+    return env
+
+
+_TOAST_SCRIPT = (
+    "$ErrorActionPreference = 'Stop';"
+    "[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+    "ContentType = WindowsRuntime];"
+    "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+    "$x = $t.GetElementsByTagName('text');"
+    "[void]$x.Item(0).AppendChild($t.CreateTextNode($env:TREEROT_TITLE));"
+    "[void]$x.Item(1).AppendChild($t.CreateTextNode($env:TREEROT_BODY));"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+    f"'{POWERSHELL_APP_ID}').Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+
+
+def notify(title, body, platform=None, run=None):
+    """Shows a desktop notification. True if the system took it. The text travels as data
+    (arguments or environment), never inside a script."""
+    platform, run = platform or sys.platform, run or _run_tool
+    if platform == "win32":
+        root = os.environ.get("SystemRoot") or "C:\\Windows"
+        ps = ntpath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        env = dict(os.environ, TREEROT_TITLE=title, TREEROT_BODY=body)
+        return run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-Command", _TOAST_SCRIPT], env=env).returncode == 0
+    if platform == "darwin":
+        return run(["osascript", "-e", "on run argv", "-e",
+                    "display notification (item 2 of argv) with title (item 1 of argv)",
+                    "-e", "end run", title, body]).returncode == 0
+    if not shutil.which("notify-send"):
+        return False
+    env = _linux_notify_env(run)
+    if env is None:
+        return False
+    return run(["notify-send", "--app-name", APP_NAME, title, body], env=env).returncode == 0
+
+
+def job_notice(job, row):
+    """(title, body) for a scan that is over, or None if there is nothing to tell."""
+    state, detail, report = row
+    if state == "finished":
+        return (f"{APP_NAME}: background scan finished",
+                f"{job['root']}\nReport: {report or job['report']}")
+    if state == "failed":
+        return f"{APP_NAME}: background scan failed", f"{job['root']}\n{detail}"
+    if state == "stopped":
+        return f"{APP_NAME}: background scan stopped", f"{job['root']}\n{detail}"
+    return None
+
+
+def notify_job(job, platform=None, run=None):
+    """Tells the user how a scan ended, once. False if the notice could not be shown yet."""
+    if job.get("notified") or job_kind(job) == "task":
+        return True
+    row = job_row(job, run=run)
+    if row[0] == "ended":                # the user ended it: nothing to tell
+        notice = None
     else:
-        exe, prefix = sys.executable, [os.path.abspath(__file__)]
-        if not exe or not os.path.isfile(exe):
-            raise BackgroundError("Could not find the Python program that is running TreeRot, "
-                                  "so a background task could not be set up.")
-    return exe, prefix + [root] + list(args) + ["--progress", "none", "--status-file", status_file]
+        notice = job_notice(job, row)
+        if notice is None:               # still running
+            return False
+        if not notify(*notice, platform=platform, run=run):
+            return False
+    try:
+        record = _own_record(job)
+    except BackgroundError:              # removed meanwhile
+        return True
+    record["notified"] = True
+    _save_job(record)
+    return True
 
 
-def build_task_xml(exe, arguments, user, logon_type="Password"):
-    """The task definition. It has no trigger on purpose: /Run starts it on demand, so no start
-    time can pass while the user types the password, and a quick scan is never run a second
-    time by a trigger that comes due after it ended."""
-    import xml.etree.ElementTree as ET
+# ---- next-login check
 
-    for value in [exe, user] + list(arguments):
-        if _NOT_TASK_TEXT.search(value):
-            raise BackgroundError(f"A background task cannot carry this text: {ascii(value)}")
-    line = subprocess.list2cmdline(arguments)
-    for text in (exe, line):
-        found = _TASK_EXPANDS.search(text)
-        if found:
-            raise BackgroundError(
-                f"A background task cannot carry {found.group()} in a path or exclusion: Windows "
-                "could replace it with something else before the scan sees it. Rename it or "
-                "leave it out, or run the scan in this window.")
-
-    def add(parent, tag, text=None, **attrs):
-        node = ET.SubElement(parent, tag, attrs)
-        node.text = text
-        return node
-    task = ET.Element("Task", {"version": "1.2", "xmlns": TASK_NS})
-    info = add(task, "RegistrationInfo")
-    add(info, "Description", f"{APP_NAME} background scan")
-    who = add(add(task, "Principals"), "Principal", id="Author")
-    add(who, "UserId", user)
-    add(who, "LogonType", logon_type)
-    add(who, "RunLevel", "LeastPrivilege")
-    settings = add(task, "Settings")
-    for tag, text in (("MultipleInstancesPolicy", "IgnoreNew"),
-                      ("DisallowStartIfOnBatteries", "false"),
-                      ("StopIfGoingOnBatteries", "false"),
-                      ("AllowStartOnDemand", "true"),
-                      ("Enabled", "true"),
-                      ("ExecutionTimeLimit", "PT0S"),
-                      ("Priority", "7")):
-        add(settings, tag, text)
-    run = add(add(task, "Actions", Context="Author"), "Exec")
-    add(run, "Command", exe)
-    add(run, "Arguments", line)
-    return '<?xml version="1.0" encoding="UTF-16"?>\n' + ET.tostring(task, encoding="unicode")
+def _desktop_exec(args):
+    """An Exec= line for a .desktop file (freedesktop quoting, then string escaping)."""
+    def quote(a):
+        return '"' + re.sub(r'([\\"`$])', r"\\\1", a) + '"'
+    return " ".join(quote(a) for a in args).replace("\\", "\\\\").replace("%", "%%")
 
 
-def write_task_xml(path, xml_text):
-    with open(path, "w", encoding="utf-16") as f:
-        f.write(xml_text)
+def _set_windows_run_value(name, value):
+    """Sets (or with None deletes) a value under the user's own Run key: no administrator."""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0,
+                        winreg.KEY_SET_VALUE) as key:
+        if value is None:
+            try:
+                winreg.DeleteValue(key, name)
+            except FileNotFoundError:
+                pass
+        else:
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+
+
+def _login_check_files(platform):
+    if platform.startswith("linux"):
+        return os.path.join(AUTOSTART_DIR, "treerot-login-check.desktop")
+    if platform == "darwin":
+        return os.path.join(LAUNCH_AGENTS_DIR, LOGIN_CHECK_LABEL + ".plist")
+    return None
+
+
+def install_login_check(platform=None):
+    """Asks the system to run `--login-check` at the user's next login. User-level only."""
+    platform = platform or sys.platform
+    cmd = self_command() + ["--login-check"]
+    if platform == "win32":
+        _set_windows_run_value(LOGIN_CHECK_NAME, subprocess.list2cmdline(cmd))
+        return
+    path = _login_check_files(platform)
+    if path is None:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    if platform == "darwin":
+        import plistlib
+        with open(tmp, "wb") as f:
+            plistlib.dump({"Label": LOGIN_CHECK_LABEL, "ProgramArguments": cmd,
+                           "RunAtLoad": True}, f)
+    else:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\n"
+                    f"Name={LOGIN_CHECK_NAME}\n"
+                    f"Comment=Shows how {APP_NAME} background scans ended while you were away\n"
+                    f"Exec={_desktop_exec(cmd)}\nNoDisplay=true\nTerminal=false\n"
+                    "X-GNOME-Autostart-enabled=true\n")
+    os.replace(tmp, path)
+
+
+def remove_login_check(platform=None):
+    platform = platform or sys.platform
+    if platform == "win32":
+        _set_windows_run_value(LOGIN_CHECK_NAME, None)
+        return
+    path = _login_check_files(platform)
+    if path:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def tidy_login_check(platform=None):
+    """Removes the next-login check once no scan is left to report."""
+    try:
+        if not any(job_kind(j) != "task" and not j.get("notified") for j in load_jobs()):
+            remove_login_check(platform)
+    except OSError:
+        pass
+
+
+def login_check(delay=LOGIN_CHECK_DELAY, platform=None, run=None):
+    """Run at login: tells about scans that ended (or were stopped) while nobody could see."""
+    if delay:
+        time.sleep(delay)
+    for job in load_jobs():
+        try:
+            notify_job(job, platform=platform, run=run)
+        except (BackgroundError, OSError):
+            pass
+    tidy_login_check(platform)
+    return 0
+
+
+def finish_job_notice(job_id, status_file):
+    """Called by the background scan itself when it ends. It must never fail the scan."""
+    try:
+        for job in load_jobs():
+            if job["id"] == job_id and job_kind(job) != "task" and _same_path(job["status_file"], status_file):
+                notify_job(job)
+                tidy_login_check()       # only for a scan of ours: never someone else's entry
+    except Exception:
+        pass
 
 
 def schtasks_exe(platform=None, environ=None):
@@ -1264,49 +1589,9 @@ def schtasks_exe(platform=None, environ=None):
     return ntpath.join(env.get("SystemRoot") or "C:\\Windows", "System32", "schtasks.exe")
 
 
-def cmd_exe(platform=None, environ=None):
-    if (platform or sys.platform) != "win32":
-        return "cmd.exe"
-    env = os.environ if environ is None else environ
-    return ntpath.join(env.get("SystemRoot") or "C:\\Windows", "System32", "cmd.exe")
-
-
-def task_create_command(task, xml_name, user, platform=None, environ=None):
-    """The line that creates the task, as one exact string. cmd.exe is there for one thing: if
-    schtasks fails, Windows' own message stays on screen until a key is pressed. Nothing can be
-    captured instead: any redirect makes the console prompt vanish under a windowed TreeRot.exe.
-    cmd reads every character here, so only names it cannot misread go on the line; the XML
-    file is found through the working folder, not by its path."""
-    if _CMD_SPECIAL.search(user):
-        raise BackgroundError(
-            f"Your Windows user name ({user}) has a character that cannot be passed safely to "
-            "Windows' password prompt. The README section \"Set up a background scan by hand\" shows another way.")
-    shell, exe = cmd_exe(platform, environ), schtasks_exe(platform, environ)
-    if _CMD_SPECIAL.search(shell + exe + task + xml_name):
-        raise BackgroundError(f"The Windows folder or task name cannot be passed safely: {shell}")
-    return (f'"{shell}" /d /c ""{exe}" /Create /TN {task} /XML {xml_name} /RU "{user}" /RP * '
-            '|| (pause & exit /b 1)"')
-
-
-def windows_user():
-    env = os.environ
-    user = env.get("USERNAME", "")
-    if not user:
-        raise BackgroundError("Could not tell which Windows user you are (USERNAME is not set).")
-    return f"{env['USERDOMAIN']}\\{user}" if env.get("USERDOMAIN") else user
-
-
 def _only_on_windows():
     if sys.platform != "win32":
         raise BackgroundError("Background scans need Windows Task Scheduler.")
-
-
-def _console_run(command, cwd):
-    """Runs the line from task_create_command in its own visible console so Windows itself can
-    ask for the password. Nothing is redirected: the prompt must reach the screen and the typing
-    must reach schtasks, never this program."""
-    _only_on_windows()
-    return subprocess.run(command, cwd=cwd, creationflags=0x00000010)     # CREATE_NEW_CONSOLE
 
 
 def _quiet_run(cmd):
@@ -1371,21 +1656,53 @@ def _names_our_task(job):
             and job.get("task") == TASK_PREFIX + job_id)
 
 
+def job_kind(job):
+    """How the scan runs: "process", "systemd", or "task" (a record from before kinds existed)."""
+    return job.get("kind", "task")
+
+
+def _valid_job(job, name=None):
+    """A record of ours, exactly: a record says which process to end and which file to open."""
+    if not isinstance(job, dict):
+        return False
+    job_id = job.get("id")
+    if not isinstance(job_id, str) or _JOB_ID.match(job_id) is None:
+        return False
+    if name is not None and name != job_id + ".json":
+        return False
+    if not (all(isinstance(job.get(k), str) for k in ("root", "report", "status_file"))
+            and _is_report_name(job["report"]) and job["status_file"] == job["report"] + STATUS_SUFFIX):
+        return False
+    kind = job_kind(job)
+    if kind == "task":
+        return _names_our_task(job)
+    if "task" in job:
+        return False
+    if kind == "systemd":
+        return job.get("unit") == UNIT_PREFIX + job_id
+    if kind == "process":
+        pid = job.get("pid")
+        return "unit" not in job and (pid is None or (type(pid) is int and pid > 0))
+    return False
+
+
 def _own_record(job):
-    """The record on disk for a job, proving the task is one this program created. Nothing is
-    ever done to a task without it."""
-    if _names_our_task(job):
+    """The record on disk for a job, proving the scan is one this program started. Nothing is
+    ever done to a process, service or task without it."""
+    if _valid_job(job):
         try:
             with open(_job_path(job["id"]), encoding="utf-8") as f:
                 record = json.load(f)
         except (OSError, ValueError):
             record = None
-        if isinstance(record, dict) and _names_our_task(record) and record["task"] == job["task"]:
-            if _still_creating(record):
+        if (_valid_job(record) and record["id"] == job["id"]
+                and job_kind(record) == job_kind(job)
+                and record.get("task") == job.get("task") and record.get("unit") == job.get("unit")):
+            if job_kind(record) == "task" and _still_creating(record):
                 raise BackgroundError("This scan is waiting for your password in its console "
                                       "window. Finish or close that window first.")
             return record
-    raise BackgroundError("This is not a task TreeRot has a record of, so it was left alone.")
+    raise BackgroundError("This is not a scan TreeRot has a record of, so it was left alone.")
 
 
 def _delete_task(task, run):
@@ -1412,10 +1729,9 @@ def _refuse_if_in_use(status_file):
 
 
 def _clear_the_way(status_file, job_id, runner):
-    """Called once the new task exists and before anything starts it: it has no trigger, so
-    only /Run can. A status file left at this path could pass for this run's result (a scan
-    stopped by bad arguments never writes one), so it goes first or nothing starts. Waiting
-    until now means canceling the password prompt loses nothing from the earlier scan."""
+    """Called before the scan starts. A status file left at this path could pass for this run's
+    result (a scan stopped by bad arguments never writes one), so it goes first or nothing
+    starts. An older scan writing the same report is forgotten."""
     try:
         os.remove(status_file)
     except FileNotFoundError:
@@ -1430,24 +1746,8 @@ def _clear_the_way(status_file, job_id, runner):
             remove_job(other, runner=runner)    # its report is about to be replaced
 
 
-def _take_back(job, run, why):
-    """The task exists but must not stay. Returns the error to show."""
-    try:
-        _delete_task(job["task"], run)
-        _forget_job(job["id"])
-        return why
-    except (BackgroundError, OSError) as e:
-        job.pop("creating", None)
-        try:
-            _save_job(job)               # no longer waiting for the prompt: Remove must work
-        except OSError:
-            pass
-        return BackgroundError(f"{why} The task could not be removed either ({e}). "
-                               "Remove it under Background scans.")
-
-
 def _refuse_bad_dates(args):
-    """No route reaches the password prompt with a date the task could only fail on. An exclusion
+    """No scan is started with a date it could only fail on. An exclusion
     is always one --exclude=VALUE argument, so an exact "--from" here is the option."""
     def value(option):
         return args[args.index(option) + 1] if option in args[:-1] else ""
@@ -1457,78 +1757,73 @@ def _refuse_bad_dates(args):
         raise BackgroundError(str(e))
 
 
-def start_background_scan(root, args, report, runner=None):
+def logoff_text(job, platform=None):
+    """What happens to this scan when the user logs off, in plain words."""
+    platform = platform or sys.platform
+    if job.get("logoff") == "keeps":
+        return "It keeps running after you log out."
+    if job.get("logoff") == "maybe":
+        return "It may stop when you log out."
+    word = "log out" if platform != "win32" else "log off"
+    return f"It stops if you {word}; until then you can close this window and lock the screen."
+
+
+def start_background_scan(root, args, report, runner=None, spawn=None, platform=None):
     """
-    Creates and starts a Windows scheduled task for the scan. Windows' console prompt collects
-    the password (/RP *), so this program never sees it. Returns the job record.
-    Slow on a slow share and waits for the user: never call it on the Tk thread.
+    Starts the scan as a background process of your own: no password, no administrator.
+    Linux runs it as a systemd user service and turns on "linger", so it outlives logout.
+    Elsewhere (and on Linux without systemd) it is a detached copy of this program.
+    Returns the job record. Slow on a slow share: never call it on the Tk thread.
     """
+    platform = platform or sys.platform
+    run = runner or _run_tool
     _refuse_bad_dates(args)
-    root, report = _full_path(root), _full_path(report)   # a short path can hide a mapped drive
-    if is_mapped_drive(root):
-        raise BackgroundError("Mapped drive letters do not exist in a background task. Enter the "
-                              "folder's full network path instead, for example \\\\server\\share.")
-    if is_mapped_drive(report):
-        raise BackgroundError("Mapped drive letters do not exist in a background task. Save the "
-                              "report by its full network path instead, for example "
-                              "\\\\server\\share\\report.html.")
+    root, report = _full_path(root), _full_path(report)
     if not _is_report_name(report):
         raise BackgroundError("A background scan's report must be a .html or .pdf file.")
     if not os.path.isdir(os.path.dirname(report)):
         raise BackgroundError(f"The report's folder does not exist or is not reachable: {report}")
     status_file = report + STATUS_SUFFIX
-    user = windows_user()
-    exe, arguments = background_command(root, list(args) + ["--report", report], status_file)
-    xml_text = build_task_xml(exe, arguments, user)
     _refuse_if_in_use(status_file)
-
     job_id = f"{datetime.now():%Y%m%d-%H%M%S}-{os.urandom(2).hex()}"
-    task = TASK_PREFIX + job_id
-    xml_name = job_id + ".xml"
-    command = task_create_command(task, xml_name, user)
-    if _full_path(JOBS_DIR).startswith("\\\\"):
-        raise BackgroundError(f"Background scans cannot keep their files on a network path "
-                              f"({JOBS_DIR}): the password window would not find them.")
-    job = {"id": job_id, "task": task, "root": root, "report": report, "status_file": status_file,
-           "started": time.time(), "creating": True}
+    cmd = worker_command(root, list(args) + ["--report", report], status_file, job_id)
     os.makedirs(JOBS_DIR, exist_ok=True)
-    _save_job(job)                       # first, so no task ever exists without a record
-    create = runner or _console_run
-    run = runner or _quiet_run
-    xml_path = os.path.join(JOBS_DIR, xml_name)
+    _clear_the_way(status_file, job_id, runner)
+    job = {"id": job_id, "kind": "process", "root": root, "report": report,
+           "status_file": status_file, "started": time.time(), "notified": False}
+    try:                                 # before the scan, so logging off at once is caught too
+        install_login_check(platform)
+    except (OSError, BackgroundError):
+        pass
+    if platform.startswith("linux") and systemd_user_available(run):
+        job.update(kind="systemd", unit=UNIT_PREFIX + job_id)
+        _save_job(job)                   # first, so no service ever runs without a record
+        if start_systemd_unit(job["unit"], cmd, run):
+            job["logoff"] = "keeps" if ensure_linger(run) else "stops"
+            _save_job(job)
+            return job
+        del job["unit"]                  # systemd said no: run it as a plain process instead
+        job["kind"] = "process"
+    _save_job(job)
     try:
-        write_task_xml(xml_path, xml_text)
-        res = create(command, cwd=JOBS_DIR)
-    except Exception:
+        pid = (spawn or _spawn_detached)(cmd)
+    except OSError as e:
         _forget_job(job_id)
-        raise
-    finally:
-        try:
-            os.remove(xml_path)
-        except OSError:
-            pass
-    if res.returncode != 0:              # a failure here may still leave a task holding a password
-        raise _take_back(job, run, BackgroundError(
-            "The background task could not be created. Windows showed the reason in the "
-            "console window that just closed. Try again to see it, or use the README section "
-            "\"Set up a background scan by hand\"."))
+        tidy_login_check(platform)
+        raise BackgroundError(f"The background scan could not be started: {e}")
+    job["pid"] = pid
     try:
-        _clear_the_way(status_file, job_id, runner)
-        del job["creating"]
-        job["started"] = time.time()     # the wait for a scan's first news starts here
-        _save_job(job)
-        res = run([schtasks_exe(), "/Run", "/TN", task])
-        if res.returncode != 0:
-            raise BackgroundError("The background task was created but could not be started. "
-                                  + _windows_text(res))
-    except (BackgroundError, OSError) as e:
-        raise _take_back(job, run, e)
+        job["pid_start"] = process_start(pid, platform)
+    except OSError:
+        job["pid_start"] = None
+    # Without systemd, Linux keeps it after logout unless the system ends the user's processes.
+    job["logoff"] = "maybe" if platform.startswith("linux") else "stops"
+    _save_job(job)
     return job
 
 
 def load_jobs():
-    """The saved job records. A file that is not exactly a record of ours is skipped: a record
-    says which file the panel will open, so its report must be a report."""
+    """The saved job records. A file that is not exactly a record of ours is skipped."""
     jobs = []
     try:
         names = sorted(os.listdir(JOBS_DIR))
@@ -1541,10 +1836,7 @@ def load_jobs():
                     job = json.load(f)
             except (OSError, ValueError):
                 continue
-            if (isinstance(job, dict) and _names_our_task(job) and n == job["id"] + ".json"
-                    and all(isinstance(job.get(k), str) for k in ("root", "report", "status_file"))
-                    and _is_report_name(job["report"])
-                    and job["status_file"] == job["report"] + STATUS_SUFFIX):
+            if _valid_job(job, n):
                 jobs.append(job)
     return jobs
 
@@ -1561,9 +1853,26 @@ def _report_in(status, job):
     return path if os.path.isfile(path) else None
 
 
-def job_row(job):
+def job_alive(job, run=None):
+    """Whether the scan's process or service still runs: True, False, or None if that can't be
+    told (a scheduled task from an older version, or the system did not answer)."""
+    kind = job_kind(job)
+    if kind == "systemd":
+        return unit_alive(job["unit"], run or _run_tool)
+    if kind == "process":
+        if job.get("pid") is None:
+            return None
+        try:
+            start = process_start(job["pid"], run=run)
+        except OSError:
+            return None
+        return start is not None and (job.get("pid_start") is None or start == job["pid_start"])
+    return None
+
+
+def job_row(job, run=None):
     """(state, text for the panel, report path or None), from one read of the status file.
-    state: creating | starting | silent | running | stalled | ended | finished | failed.
+    state: creating | starting | silent | running | stalled | stopped | ended | finished | failed.
     Reads the status file, maybe on a dead share: never call it on the Tk thread."""
     if job.get("creating"):              # any status file there is still an earlier scan's
         if _still_creating(job):
@@ -1580,13 +1889,19 @@ def job_row(job):
         return "failed", str(s.get("error") or "The scan failed."), None
     if job.get("ended"):
         return "ended", "You ended this scan.", None
+    alive = job_alive(job, run) if job_kind(job) != "task" else None
     if s is None:
+        if alive is False:
+            return ("stopped", "The scan ended before it could write its status. The report's "
+                               "folder may be out of reach.", None)
         started = job.get("started")
         if isinstance(started, (int, float)) and time.time() - started > STARTING_GRACE_SECONDS:
             return ("silent", "The scan did not start, or failed before it could write its status. "
                               "The report's folder may also be out of reach.", None)
-        return ("starting", "Waiting for the task to start. If this stays, it failed before it "
+        return ("starting", "Waiting for the scan to start. If this stays, it failed before it "
                             "could write its status.", None)
+    if alive is False:
+        return "stopped", STOPPED_TEXT, None
     if status_is_stale(s):
         return ("stalled", "The scan seems to have stopped: no news for over "
                            f"{STATUS_STALE_SECONDS // 60} minutes. The computer may have restarted, "
@@ -1626,9 +1941,9 @@ def _task_start_problem(task, run):
 
 
 def job_panel_row(job, runner=None):
-    """job_row, and for a scan that never got going, what Windows says about it."""
+    """job_row, and for an old scheduled task that never got going, what Windows says about it."""
     row = job_row(job)
-    if row[0] == "silent":
+    if row[0] == "silent" and job_kind(job) == "task":
         problem = _task_start_problem(job["task"], runner or _quiet_run)
         if problem:
             return row[0], problem, row[2]
@@ -1646,30 +1961,47 @@ def job_report(job):
 
 
 def end_job(job, runner=None):
-    """Stops the scan by ending its task. The record stays so the panel can say what happened."""
+    """Stops the scan. The record stays so the panel can say what happened."""
     record = _own_record(job)
-    if record.get("task_removed"):
-        return
-    res = (runner or _quiet_run)([schtasks_exe(), "/End", "/TN", record["task"]])
-    if res.returncode != 0:
-        raise BackgroundError(f"The background task could not be ended. {_windows_text(res)}".strip())
+    kind = job_kind(record)
+    if kind == "task":
+        if record.get("task_removed"):
+            return
+        res = (runner or _quiet_run)([schtasks_exe(), "/End", "/TN", record["task"]])
+        if res.returncode != 0:
+            raise BackgroundError(f"The background task could not be ended. {_windows_text(res)}".strip())
+    elif kind == "systemd":
+        run = runner or _run_tool
+        res = run(["systemctl", "--user", "stop", record["unit"]])
+        if res.returncode != 0 and unit_alive(record["unit"], run) is not False:
+            raise BackgroundError("The background scan could not be ended. "
+                                  + (res.stderr or b"").decode("utf-8", "replace").strip())
+    elif record.get("pid") is not None:
+        try:
+            stop_process(record["pid"], record.get("pid_start"))
+        except OSError as e:
+            raise BackgroundError(f"The background scan could not be ended. {e}")
     record["ended"] = True
+    record["notified"] = True            # you ended it yourself: no notice needed
     _save_job(record)
 
 
 def remove_job(job, runner=None):
-    """Deletes the scheduled task and the job record. The report and its status stay."""
+    """Forgets the scan (an old scheduled task is deleted too). The report and its status stay."""
     record = _own_record(job)
-    if not record.get("task_removed"):
+    if job_kind(record) == "task" and not record.get("task_removed"):
         _delete_task(record["task"], runner or _quiet_run)
     _forget_job(record["id"])
+    tidy_login_check()
 
 
 def drop_finished_task(job, runner=None):
-    """Deletes the scheduled task of a scan that is over, which also drops the password Windows
-    stored for it. The job record stays until the user presses Remove, so someone who logged
-    off still sees the result and can open the report. A failure leaves things as they were
-    for the next try. Only for JOB_OVER: a silent or stalled scan may be alive."""
+    """Deletes the scheduled task of an old-style scan that is over, which also drops the
+    password Windows stored for it. The job record stays until the user presses Remove, so
+    someone who logged off still sees the result. A failure leaves things as they were for the
+    next try. Only for JOB_OVER: a silent or stalled scan may be alive."""
+    if job_kind(job) != "task":
+        return
     try:
         record = _own_record(job)
         if record.get("task_removed"):
@@ -1683,9 +2015,9 @@ def drop_finished_task(job, runner=None):
 
 
 def clean_finished_jobs(runner=None):
-    """Tasks that are over are deleted on the next launch. Slow work: never on the Tk thread."""
+    """Old-style tasks that are over are deleted on the next launch. Slow: never on the Tk thread."""
     for job in load_jobs():
-        if not job.get("task_removed") and job_state(job)[0] in JOB_OVER:
+        if job_kind(job) == "task" and not job.get("task_removed") and job_state(job)[0] in JOB_OVER:
             drop_finished_task(job, runner)
 
 
@@ -1751,7 +2083,7 @@ def run_gui(preload=None, on_ready=None):
             self._bg_token = 0        # the newest "Run in background" press; older checks are ignored
             self._scan_token = 0      # a folder still being checked before a scan
             self._scan_checking = False
-            self._bg_starting = False # a task is being created (the password prompt may be open)
+            self._bg_starting = False # a background scan is being started
             self._jobs_ui = None      # the Background scans panel, while it is open
             self._jobs_gen = 0
 
@@ -2141,10 +2473,9 @@ def run_gui(preload=None, on_ready=None):
 
         def _on_close(self):
             if self._bg_starting:
-                # A task made now would hold the password with no one left to start it.
                 messagebox.showinfo(
-                    "Background scan", "The password window for a background scan is still open. "
-                    "Finish or close that window first, then close TreeRot.")
+                    "Background scan", "A background scan is still being started. "
+                    "Wait a moment, then close TreeRot.")
                 return
             try:
                 self._save_settings()
@@ -2404,7 +2735,7 @@ def run_gui(preload=None, on_ready=None):
             elif msg[0] == "bg_checked":
                 self._bg_checked(*msg[1:])
             elif msg[0] == "background":
-                self._bg_started(msg[1])
+                self._bg_started(msg[1], msg[2] if len(msg) > 2 else None)
             elif msg[0] == "jobs_list":
                 self._jobs_listed(*msg[1:])
             elif msg[0] == "job_row":
@@ -3149,7 +3480,7 @@ def run_gui(preload=None, on_ready=None):
                 except Exception as e:
                     messagebox.showerror("Cannot open", str(e))
 
-        # ---- background scans (Windows). Everything slow runs on a worker that reports through
+        # ---- background scans. Everything slow runs on a worker that reports through
         # self.q: a status file or report on a dead share must never stall this thread.
         def _clean_finished_jobs(self):
             def work():
@@ -3161,15 +3492,14 @@ def run_gui(preload=None, on_ready=None):
 
         def _run_background(self):
             if self._bg_starting:
-                self.status_var.set("A background scan is still being set up. "
-                                    "Look for the console window asking for your password.")
+                self.status_var.set("A background scan is still being started.")
                 return
             root = self.path_var.get().strip().strip(QUOTE)
             if not root:
                 messagebox.showerror("Invalid path", "Enter the folder or share to scan.")
                 return
             text_from, text_to = self.from_var.get().strip(), self.to_var.get().strip()
-            try:                     # before the password prompt: the task could only fail
+            try:                     # before starting: the scan could only fail
                 d_from, d_to, _, _ = read_period(text_from, text_to)
             except ValueError as e:
                 messagebox.showerror("Invalid date", str(e))
@@ -3204,6 +3534,14 @@ def run_gui(preload=None, on_ready=None):
                 self.status_var.set("The background scan was not started.")
                 messagebox.showerror("Background scan", problem)
                 return
+            if is_file_manager_share(root) and not messagebox.askyesno(
+                    "Background scan",
+                    "This share is opened through the file manager. It disappears when you log "
+                    "out, so a background scan of it stops then.\n\nTo scan it while logged "
+                    "out, have it mounted by the system (fstab or autofs) and scan that path.\n\n"
+                    "Start the scan anyway?"):
+                self.status_var.set("The background scan was not started.")
+                return
             fn = filedialog.asksaveasfilename(
                 title="Where should the report be saved?", defaultextension=".html",
                 filetypes=[("HTML report", "*.html"), ("PDF report", "*.pdf")],
@@ -3212,25 +3550,27 @@ def run_gui(preload=None, on_ready=None):
                 self.status_var.set("The background scan was not started.")
                 return
             self._bg_starting = True
-            self.status_var.set("A console window will ask for your Windows password...")
+            self.status_var.set("Starting the background scan...")
             q = self.q
 
             def work():
                 try:
-                    start_background_scan(root, args, fn)
-                    q.put(("background", None))
+                    job = start_background_scan(root, args, fn)
+                    q.put(("background", None, job))
                 except Exception as e:
-                    q.put(("background", str(e) or type(e).__name__))
+                    q.put(("background", str(e) or type(e).__name__, None))
             threading.Thread(target=work, daemon=True).start()
 
-        def _bg_started(self, problem):
+        def _bg_started(self, problem, job=None):
             self._bg_starting = False
             if problem:
                 self.status_var.set("The background scan was not started.")
                 messagebox.showerror("Background scan", problem)
             else:
-                self.status_var.set("The background scan is running. You can close this "
-                                    "window and log off. See Background scans for progress.")
+                self.status_var.set("The background scan is running. You can close this window. "
+                                    + (logoff_text(job) + " " if job else "")
+                                    + "A notification tells you when it ends. "
+                                    "See Background scans for progress.")
 
         def _jobs_panel(self):
             ui = self._jobs_ui
@@ -5097,11 +5437,15 @@ def run_cli(a, root):
         rc = _run_cli(a, root, status)
     except BaseException as e:
         status.finish("failed", str(e) or type(e).__name__)
+        if a.job_id and not isinstance(e, KeyboardInterrupt):
+            finish_job_notice(a.job_id, a.status_file)
         raise
     if rc == 0:
         status.finish("finished")
     else:
         status.finish("failed", status.error_text or f"The scan failed (exit code {rc}).")
+    if a.job_id:
+        finish_job_notice(a.job_id, a.status_file)
     return rc
 
 
@@ -5400,6 +5744,8 @@ def build_parser():
                         "are exact instead of estimated (slower: the tree is listed twice)")
     g.add_argument("-q", "--quiet", action="store_true", help="no progress or summary on stderr")
     ap.add_argument("--preload", metavar="PATH", help=argparse.SUPPRESS)
+    ap.add_argument("--job-id", metavar="ID", help=argparse.SUPPRESS)       # a background scan
+    ap.add_argument("--login-check", action="store_true", help=argparse.SUPPRESS)
     return ap
 
 
@@ -5410,6 +5756,8 @@ def main(argv=None):
     if a.cli is not None and not (a.cli or a.path):
         ap.error("--cli needs a PATH")
     target = a.cli or a.path
+    if a.login_check:
+        return login_check()
     try:
         if target:
             return run_cli(a, target)

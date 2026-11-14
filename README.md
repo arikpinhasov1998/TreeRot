@@ -20,9 +20,9 @@ It runs on Windows, Linux and macOS, with a window or from the command line (for
 **What has and has not been tested.** The automatic tests have so far been run only on the
 developer's Mac. GitHub's build is set up to run the same tests on Windows, Linux and macOS
 before it builds anything, but that workflow has not run yet, so nothing is proven on those
-systems. The Windows features listed under
-[Check on a real Windows server](#check-on-a-real-windows-server) have not been tried on a real
-Windows server. Please run that checklist before you rely on them.
+systems. Background scans have been run for real on Linux (Ubuntu, systemd) only; the steps
+under [Check on real computers](#check-on-real-computers) have not been tried on Windows or
+macOS yet. Please run that checklist before you rely on them.
 
 ## Download
 
@@ -31,7 +31,7 @@ Go to the [**Releases**](../../releases/latest) page and download the file for y
 | System | Download | What you get |
 |---|---|---|
 | Windows 10 / 11 | `TreeRot.exe` | The window. Double-click to start. |
-| | `TreeRot-cli.exe` | The command line, for scripts and Task Scheduler. |
+| | `TreeRot-cli.exe` | The command line, for scripts and terminals. Not needed for background scans. |
 | Linux (x86-64) | `treerot-linux-x86_64.tar.gz` | One program for both the window and the command line. |
 | macOS, Apple Silicon (M1 and later) | `TreeRot-macos-arm64.zip` | `TreeRot.app` and the command-line program `treerot`. |
 | macOS, Intel | `TreeRot-macos-x86_64.zip` | The same, for Intel Macs. |
@@ -131,103 +131,71 @@ This stops *automatic* sleep. It does not stop a person closing a laptop lid or 
 and the computer can still be shut down. If TreeRot cannot keep the computer awake, it says so;
 a sleeping computer pauses the scan.
 
-### What survives what (Windows)
+### Run in background
 
-| What happens | Scan in the window | Run in background |
-|---|---|---|
-| Closing the RDP window (disconnect) | Should keep running, unless a server policy ends disconnected sessions | Should keep running |
-| Logging off | Stops | Should keep running |
-| The computer restarts | Stops | Stops; start it again |
+**What it does.** In the window, **Run in background...** starts the scan as a separate copy of
+TreeRot that keeps going after you close the window. **Background scans** lists these scans,
+shows their progress, ends them, and opens the finished report, also after you close and reopen
+TreeRot. When a scan finishes, fails or is stopped, a **desktop notification** says so.
 
-"Should" is deliberate: this has not been tried on a real server yet. See the checklist below.
-
-### Run in background (Windows window)
-
-**What it does.** In the window, **Run in background...** creates a Windows scheduled task that
-runs `TreeRot-cli.exe` for you, under your own account, and starts it at once. The scan then
-carries on without the window and without you being logged on. **Background scans** lists these
-scans, shows their progress, and opens the finished report. It follows them even after you
-close and reopen TreeRot.
+It works on Windows, Linux and macOS, from the one program you downloaded. **No administrator
+rights, no password and no installation** are needed: the scan runs as your own process.
 
 **How to use it.**
 
 1. Enter the folder and set the dates and exclusions as for a normal scan.
 2. Click **Run in background...** and choose where to save the report (HTML or PDF).
-3. A black Windows console window opens and asks for **your Windows password**. Type it there.
-4. Open **Background scans** to follow the scan. When it says finished, click **Open report**.
+3. Close the window if you like. Open **Background scans** to follow the scan; when it says
+   finished, click **Open report**.
 
-**Your password.** Windows' own console prompt collects it. TreeRot never sees it, never stores
-it and never writes it to a file. Windows keeps the password with the task, because the task needs
-it to run when you are logged off. That has a consequence you should know about: **the password
-stays stored with the task until the task is removed.** TreeRot removes the finished task for you
-when you open **Background scans** or the next time it starts, or when you press **Remove**. If
-TreeRot is never opened again, the task, and the password stored with it, stay in Windows. To delete
-one by hand, see [Delete a background task by hand](#delete-a-background-task-by-hand).
+**What survives what.**
 
-**If the task cannot be created.** Windows' own error appears in the console window and stays
-there until you press a key. Read it before you close the window: closing it counts as a failure.
-Common reasons are a wrong password or an account that is not allowed to run a task without being
-logged on (the Windows policy "Log on as a batch job"). TreeRot's window then points you at
-[Set up a background scan by hand](#set-up-a-background-scan-by-hand).
+| What happens | Scan in the window | Run in background |
+|---|---|---|
+| Closing the TreeRot window | Stops | Keeps running |
+| Locking the screen, closing the RDP window (disconnect) | Keeps running | Keeps running |
+| Logging off, **Windows** | Stops | Stops |
+| Logging out, **macOS** | Stops | Stops |
+| Logging out, **Linux** | Stops | Keeps running (see below) |
+| The computer restarts | Stops | Stops; start it again |
 
-**Rules.**
+* **Windows and macOS** do not let a normal user keep a program running after logging off;
+  only an administrator-installed service could. TreeRot does not store your password to get
+  around this, so a background scan there runs until you log off.
+* **Linux** runs the scan as a systemd *user service* and turns on "linger" for your account
+  (`loginctl enable-linger`), which keeps your services running after you log out. Most
+  distributions let you do that for yourself without an administrator. If it is refused, or the
+  system has no systemd, TreeRot says the scan may stop when you log out.
+* **Linux shares opened in the file manager** (they appear under `/run/user/<id>/gvfs/`) belong
+  to your desktop session and disappear when you log out. TreeRot warns you and still lets you
+  scan them. To scan a share while logged out, have it mounted by the system (`/etc/fstab` or
+  autofs, usually set up by an administrator) and scan that path instead. Local disks and
+  system-mounted shares (SMB or NFS) keep working after logout.
+* A scan stopped by logging off or a restart shows as **Stopped** in **Background scans**.
 
-* **Use a network path** (`\\server\share`), not a mapped drive such as `Z:`. A background task
-  has no mapped drives, so TreeRot refuses them for the folder to scan and for the report.
-  The report may go to a local drive such as `C:\reports`, or to a UNC path.
-* **The folder or report must not contain `%NAME%` or `$(Arg0)`** (a percent sign pair around
-  text, or a dollar sign followed by text in parentheses). Task Scheduler may expand these in a
-  command line and silently change the path, so TreeRot refuses them. A lone `100%` or `$5` is
-  fine.
-* **Your Windows user name cannot contain `&`, `%`, `^`, `|`, `<`, `>` or `"`.** The button
-  refuses it, because the user name has to pass through `cmd.exe` to Windows' password prompt.
-  Use the manual route.
-* You need permission to create scheduled tasks. A standard account normally has it for its
-  own tasks, but see the checklist.
+**Notifications.** When a background scan ends you get a notification from your desktop
+(Windows notification center, `notify-send` on Linux, Notification Center on macOS). If nobody
+is logged in at that moment, or logging off stopped the scan, the notification appears **at
+your next login**. For that, TreeRot adds a small login item while a scan is unreported and
+removes it afterwards:
 
-### Set up a background scan by hand
+| System | Login item (your own account only) |
+|---|---|
+| Windows | A value named `TreeRot login check` under `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` |
+| Linux | `~/.config/autostart/treerot-login-check.desktop` |
+| macOS | `~/Library/LaunchAgents/io.github.arikpinhasov1998.treerot.login-check.plist` |
 
-Use this when the button refuses your user name, when the task cannot be created, or when
-you prefer to see every setting. It does not need the TreeRot window. A task made this way does
-**not** appear in **Background scans**; you follow it by its report and its log.
+It runs `TreeRot --login-check` from where the program was when the scan started, so if you
+move or delete the program in the meantime, the login item does nothing; it is safe to delete.
 
-1. Open **Task Scheduler** (Start menu, type "Task Scheduler").
-2. Choose **Action > Create Task...** (not "Create Basic Task").
-3. **General:** give it a name such as `Share scan`. Choose **Run whether user is logged on or
-   not**. Tick **Do not store password** only if the scan does not need network access (leave it
-   unticked for a `\\server\share`). The account must be allowed to read the share and write the
-   report.
-4. **Actions > New...:** *Start a program*.
-   * Program/script: the full path of `TreeRot-cli.exe`, for example `C:\Tools\TreeRot-cli.exe`
-   * Add arguments: `"\\server\share" --from 2024-11-04 --format summary --report "C:\reports\share.html"`
-   * Leave *Start in* empty, or use a folder the account can write to.
-5. **Settings:** untick **Stop the task if it runs longer than**. The default of 3 days ends long
-   scans. Leave **Allow task to be run on demand** ticked.
-6. Click **OK**. Windows asks for your password; this is Windows' own dialog.
-7. Right-click the new task in the list and choose **Run**. The **Last Run Result** column shows
-   `0x0` when it succeeded.
+**Where TreeRot keeps its records.** A small record of each background scan sits in
+`.treerot/jobs` in your home folder, and each scan writes its progress next to the report
+(`<report>.status.json`). Removing a scan in **Background scans** deletes its record but keeps
+the report and its status file.
 
-**Avoid `%NAME%` and `$(...)` in paths here as well.** Task Scheduler may expand them in the
-arguments and change the path, and this has not been tested. If your folder name has them, scan
-its parent folder instead, or rename the folder.
-
-A task does not keep the program's text output. The report is the result; add `--status-file
-C:\reports\share.status.json` if you also want a small file that shows progress while it runs.
-
-### Delete a background task by hand
-
-TreeRot's tasks are named `TreeRot-` followed by the date and a short code, in the top level of
-**Task Scheduler Library**. To remove one: open Task Scheduler, find it, right-click and choose
-**Delete**. Or, in a Command Prompt run as the same user:
-
-```
-schtasks /Query /FO CSV /NH
-schtasks /Delete /TN TreeRot-20261104-120000-ab12 /F
-```
-
-The first line lists your tasks; use the name from the list in the second. Deleting the task also
-deletes the password Windows stored with it. TreeRot keeps a small record of each background scan
-in `.treerot\jobs` in your home folder; it is safe to delete those files too.
+**Scans started by older versions (Windows).** Versions before this one created a Windows
+scheduled task that stored your password. Such scans still appear in **Background scans** and
+**Remove** still deletes their task, and with it the stored password. New scans never create one.
 
 ### Linux and macOS: scans that outlive your terminal
 
@@ -254,72 +222,54 @@ unpacked the program), because they do not start in your current
 folder. To keep a `--user` systemd unit running after you log out, run `loginctl enable-linger`
 once. These commands were written for this README and have not all been run on every system.
 
-### Check on a real Windows server
+### Check on real computers
 
-TreeRot's tests cannot create real scheduled tasks, log off, or reach a real server, so these
-checks need a person. Please run them once on the Windows Server you care about and tell the
-developer what differed. Each step says what should happen. Use a test folder first.
+TreeRot's tests cannot log off, restart, or reach a real server, so these checks need a person.
+Please run them once on each system you care about and tell the developer what differed. Each
+step says what should happen. Use a test folder first, and a **standard (non-admin) account**.
 
-**A. The window and RDP**
+**A. The window and RDP (Windows)**
 
 1. Start a scan of a large `\\server\share` in the window. Close the RDP window without logging
    off, wait a minute, reconnect. *The scan should still be running, unless a server policy ends
    disconnected sessions.*
-2. Start another scan, then log off, log back on, and open TreeRot. *The scan has stopped; that
-   is expected for a scan in the window.*
-3. Start a scan and leave the computer alone for longer than its sleep time. *The scan should
-   keep going and the computer should not sleep.* Also try choosing Sleep yourself: *the scan
-   pauses, and carries on after waking.*
-4. Scan a UNC path (`\\server\share`). *It works and files can be listed.* Try a mapped drive
-   letter in **Run in background...** *It is refused with a clear message.*
-5. Open a folder with spaces in its path, right-click a file in it and choose **Open in file
+2. Start a scan and leave the computer alone for longer than its sleep time. *The scan should
+   keep going and the computer should not sleep.*
+3. Open a folder with spaces in its path, right-click a file in it and choose **Open in file
    manager**. *Explorer opens with that file selected.* Try a folder name with Hebrew letters
    and one with `&`.
 
-**B. Run in background**
+**B. Run in background (every system)**
 
-6. Sign in as a **standard (non-admin) user**. Click **Run in background...** with a `\\server\share`
-   path. *The password console appears and the task is created.* If it fails with "access is
-   denied", note the exact words.
-7. Type your password in the black console window. *Windows accepts it, and **Background scans**
-   shows the scan running within a minute.* Do this once with a folder and report path that
-   contain spaces and Hebrew letters.
-8. Run it again and type a **wrong password**. *The console shows Windows' error and waits for a
-   key; the TreeRot window then says the task could not be created and points at the README.*
-   Try closing the console without pressing a key: *this counts as a failure.*
-9. Ask your Windows administrator for an account that is **not allowed to run tasks while logged
-   off** (in Windows this permission is called "Log on as a batch job"; a locked-down account often
-   lacks it). Try **Run in background...** with it. *You should see a reason you can understand,
-   in the console window or in **Background scans**. Write down the exact words if it is unclear.*
-10. With a scan running in the background, close the RDP window. *The scan keeps running.* Then log
-    off and log back on and open TreeRot: *Background scans still lists it, with progress, and
-    **Open report** works when it has finished.*
-11. Press **End scan** on a running background scan. *It stops.* Press **Remove**. *The row goes,
-    and the task is gone from Task Scheduler.*
-12. Finish a scan, then close TreeRot without pressing Remove and open it again. *The finished
-    task is gone from Task Scheduler (check the Task Scheduler Library) and the entry stays in the
-    list with **Open report**.*
-13. Try to use a path containing `%NAME%` and one containing `$(Arg0)`. *Both are refused.*
-    Try a user name with `&` if you have one. *Refused, with a pointer to the manual route.*
-14. Follow [Set up a background scan by hand](#set-up-a-background-scan-by-hand) once. *It runs
-    and writes the report.*
-15. Run a background scan with a **PDF** report. *The PDF is made even though no one is logged
-    on.* If not, note the message: it names each browser that failed. Then run one with the report
-    on a network path such as `\\server\share\report.pdf`. *The report and its status reach the
-    share, and **Open report** opens it.*
-16. *Only if your company signs in with Microsoft work accounts (Azure AD, now called Entra ID;
-    the user name looks like `AzureAD\name`):* try **Run in background...** with such an account.
-    *It works, or it shows a clear reason why not.*
+4. Click **Run in background...** on a large folder and save the report. *No password is asked
+   for, no console window appears, and **Background scans** shows the scan running within a
+   minute.* Do this once with a folder and report path that contain spaces and Hebrew letters.
+5. Close the TreeRot window. *The scan keeps running.* Open TreeRot again: *Background scans
+   still lists it with progress.*
+6. Wait for it to finish. *A notification says it finished; **Open report** opens the report.*
+7. Press **End scan** on a running background scan. *It stops and shows Ended; no notification.*
+   Press **Remove**. *The row goes; the report and its status file stay.*
+8. Run a background scan with a **PDF** report, and one with the report on a network path.
+   *Both reports are made and **Open report** opens them.*
+9. *Windows:* use a **mapped drive letter** (such as `Z:`) for the folder. *It works, because
+   the scan runs in your own session.*
 
-**C. Smaller things not yet seen on Windows**
+**C. Logging off**
 
-17. Run a background scan with a long list of exclusions (dozens). *It starts normally.*
-18. After a wrong-password failure, the **Background scans** panel should say the task never
-    started and let you **Remove** it.
-19. In the panel, a task Windows could not start should show a reason in plain words
-    (for example "the password has expired").
-20. *Optional, for developers:* if Python is installed on the server, open a Command Prompt in the
-    TreeRot folder and run `python -m unittest discover -s tests -v`. *Every test passes.*
+10. *Windows and macOS:* start a long background scan, then log off and log back on. *A
+    notification soon after login says the scan was stopped; **Background scans** shows it as
+    Stopped.*
+11. *Linux:* start a long background scan of a local folder, then log out. Log back in after it
+    should have finished. *A notification after login says it finished, and the report is there.*
+    Run `loginctl show-user $USER --property=Linger`: *it says `Linger=yes`.*
+12. *Linux:* open a share in the file manager and try **Run in background...** on its
+    `/run/user/.../gvfs/...` path. *TreeRot warns that it stops at logout and lets you choose.*
+13. After every scan has been reported, check the login item from the table above. *It is gone.*
+
+**D. Optional, for developers**
+
+14. If Python is installed, open a terminal in the TreeRot folder and run
+    `python -m unittest discover -s tests -v`. *Every test passes.*
 
 ## Run from source
 

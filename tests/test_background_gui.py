@@ -1,5 +1,5 @@
-"""The window's side of background scans. schtasks never runs here: _quiet_run and _console_run
-are replaced for every test, and the buttons are normally only built on Windows."""
+"""The window's side of background scans. No real process, service or scheduled task is started
+here: the launcher, process table and schtasks are fakes for every test (see JobCase)."""
 import os
 import subprocess
 import tempfile
@@ -26,7 +26,6 @@ class BackgroundGui(GuiCase, JobCase):
         self.schtasks = []
         self.schtasks_threads = []
         for patch in (mock.patch.object(app, "_quiet_run", self.fake_quiet),
-                      mock.patch.object(app, "_console_run", self.no_console),
                       mock.patch.object(app, "JOBS_REFRESH_MS", 100)):
             patch.start()
             self.addCleanup(patch.stop)
@@ -35,9 +34,6 @@ class BackgroundGui(GuiCase, JobCase):
         self.schtasks.append(cmd)
         self.schtasks_threads.append(threading.current_thread())
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-    def no_console(self, cmd, **kw):
-        raise AssertionError("a test tried to open the password console")
 
     def wait(self, w, cond, then, tries=400):
         """Runs then() on the Tk thread once cond() holds. Errors surface in the test."""
@@ -105,7 +101,7 @@ class Buttons(BackgroundGui):
 
 class Launch(BackgroundGui):
     def test_cleanup_at_launch_is_off_the_tk_thread_and_a_dead_share_cannot_hold_the_window(self):
-        job = self.start()
+        job = self.legacy()
         self.write_status(job, state="finished", report=job["report"])
         release = threading.Event()
         self.addCleanup(release.set)
@@ -211,9 +207,8 @@ class Panel(BackgroundGui):
                 self.wait(w, lambda: self.row(w, good) == "Running", good_shown)
             self.run_case(check)
 
-    def test_a_silent_scan_shows_why_and_asks_off_the_tk_thread(self):
-        job = self.start()
-        app._save_job(dict(job, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+    def test_an_old_silent_task_shows_why_and_asks_off_the_tk_thread(self):
+        job = self.legacy(started=time.time() - app.STARTING_GRACE_SECONDS - 1)
         threads = []
 
         def query(cmd):
@@ -283,8 +278,8 @@ class Panel(BackgroundGui):
 
 
 class PanelCleansUp(BackgroundGui):
-    def test_an_open_panel_deletes_a_finished_task_and_keeps_the_entry(self):
-        job = self.start()
+    def test_an_open_panel_deletes_a_finished_old_task_and_keeps_the_entry(self):
+        job = self.legacy()
         with open(job["report"], "w") as f:
             f.write("x")
 
@@ -314,9 +309,9 @@ class PanelCleansUp(BackgroundGui):
             self.wait(w, lambda: self.row(w, job) == "Running", running)
         self.run_case(check)
 
-    def test_an_open_panel_leaves_tasks_that_may_be_alive(self):
-        silent, stalled = self.start("a.html"), self.start("b.html")
-        app._save_job(dict(silent, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+    def test_an_open_panel_leaves_old_tasks_that_may_be_alive(self):
+        silent = self.legacy("a.html", started=time.time() - app.STARTING_GRACE_SECONDS - 1)
+        stalled = self.legacy("b.html")
         self.write_status(stalled, updated=time.time() - 3600)
 
         def check(w):
@@ -415,8 +410,8 @@ class EndAndRemove(BackgroundGui):
 
                     def gone():
                         self.assertEqual(app.load_jobs(), [])
-                        self.assertEqual([c[1] for c in self.schtasks], ["/Delete"])
-                        self.assertNotIn(self.tk_thread, self.schtasks_threads)
+                        self.assertEqual(self.schtasks, [])
+                        self.assertEqual(self.stopped, [])
                         w.after(300, stays_gone)
 
                     def stays_gone():
@@ -436,7 +431,8 @@ class EndAndRemove(BackgroundGui):
                     self.press(w, "remove")
 
                     def gone():
-                        self.assertEqual([c[1] for c in self.schtasks], ["/End", "/Delete"])
+                        self.assertEqual(self.stopped, [job["pid"]])
+                        self.assertEqual(app.load_jobs(), [])
                         self.assertTrue(ask.called)
                         self.finish()
                     self.wait(w, lambda: self.row(w, job) is None, gone)
@@ -453,14 +449,14 @@ class EndAndRemove(BackgroundGui):
                     w.after(300, nothing_happened)
 
                 def nothing_happened():
-                    self.assertEqual(self.schtasks, [])
+                    self.assertEqual(self.stopped, [])
                     self.assertEqual(len(app.load_jobs()), 1)
                     self.finish()
                 self.selected(w, job, "Running", then)
             self.run_case(check)
 
     def test_a_failed_remove_says_why_and_keeps_the_row(self):
-        job = self.start()
+        job = self.legacy()
         self.write_status(job, state="finished", report=job["report"])
         self.schtasks_seen = False
 
@@ -490,16 +486,14 @@ class EndAndRemove(BackgroundGui):
                     self.press(w, "end")
 
                     def ended():
-                        self.assertEqual(self.schtasks[0][1], "/End")     # then, being over, /Delete
-                        self.assertNotIn(self.tk_thread, self.schtasks_threads)
+                        self.assertEqual(self.stopped, [job["pid"]])
                         self.finish()
                     self.wait(w, lambda: self.row(w, job) == "Ended", ended)
                 self.selected(w, job, "Running", then)
             self.run_case(check)
 
-    def test_during_the_password_prompt_nothing_can_be_pressed(self):
-        job = self.start()
-        app._save_job(dict(job, creating=True, started=time.time()))
+    def test_during_an_old_password_prompt_nothing_can_be_pressed(self):
+        job = self.legacy(creating=True)
 
         def check(w):
             def then():
@@ -561,18 +555,33 @@ class RunInBackground(BackgroundGui):
         save.assert_not_called()
         start.assert_not_called()
 
-    def test_mapped_drive_is_refused_and_no_save_dialog_opens(self):
-        with mock.patch.object(app, "is_mapped_drive", return_value=True), \
-                mock.patch.object(filedialog(), "asksaveasfilename") as ask, \
+    def test_a_file_manager_share_warns_and_no_means_no_scan(self):
+        with mock.patch.object(app, "is_file_manager_share", return_value=True), \
+                mock.patch.object(app_messagebox(), "askyesno", return_value=False) as ask, \
+                mock.patch.object(filedialog(), "asksaveasfilename") as save, \
                 mock.patch.object(app, "start_background_scan") as start:
             def check(w):
                 w.path_var.set(self.d)
                 w._run_background()
-                self.wait(w, lambda: self.showerror.called, self.finish)
+                self.wait(w, lambda: ask.called, lambda: w.after(200, self.finish))
             self.run_case(check)
-        self.assertIn("\\\\server\\share", self.showerror.call_args[0][1])
-        ask.assert_not_called()
+        self.assertIn("log out", ask.call_args[0][1])
+        self.assertIn("fstab", ask.call_args[0][1])
+        save.assert_not_called()
         start.assert_not_called()
+
+    def test_a_file_manager_share_can_still_be_scanned_after_the_warning(self):
+        report = os.path.join(self.d, "r.html")
+        with mock.patch.object(app, "is_file_manager_share", return_value=True), \
+                mock.patch.object(app_messagebox(), "askyesno", return_value=True), \
+                mock.patch.object(filedialog(), "asksaveasfilename", return_value=report), \
+                mock.patch.object(app, "start_background_scan", return_value={}) as start:
+            def check(w):
+                w.path_var.set(self.d)
+                w._run_background()
+                self.wait(w, lambda: start.called, lambda: w.after(200, self.finish))
+            self.run_case(check)
+        self.assertEqual(start.call_args[0][2], report)
 
     def test_a_dead_folder_cannot_freeze_the_window_and_a_new_try_replaces_it(self):
         release = threading.Event()
@@ -623,7 +632,7 @@ class RunInBackground(BackgroundGui):
 
         def start(root, args, rep):
             seen.update(root=root, args=args, report=rep, thread=threading.current_thread())
-            return {}
+            return {"logoff": "stops"}
         with mock.patch.object(filedialog(), "asksaveasfilename", return_value=report), \
                 mock.patch.object(app, "start_background_scan", start):
             def check(w):
@@ -638,9 +647,10 @@ class RunInBackground(BackgroundGui):
                 w._run_background()
 
                 def told():
-                    self.assertIn("log off", w.status_var.get())
+                    self.assertIn("notification", w.status_var.get())
+                    self.assertNotIn("password", w.status_var.get().lower())
                     self.finish()
-                self.wait(w, lambda: "log off" in w.status_var.get(), told)
+                self.wait(w, lambda: "stops if you log" in w.status_var.get(), told)
             self.run_case(check)
         self.assertIsNot(seen["thread"], self.tk_thread)
         self.assertEqual(seen["root"], self.d)
@@ -672,21 +682,21 @@ class RunInBackground(BackgroundGui):
                 self.wait(w, lambda: self.showerror.called, told)
             self.run_case(check)
 
-    def test_closing_during_the_password_prompt_explains_and_stays_open(self):
+    def test_closing_while_a_scan_is_being_started_explains_and_stays_open(self):
         def check(w):
             w._bg_starting = True
             with mock.patch.object(app_messagebox(), "showinfo") as info, \
                     mock.patch.object(w, "destroy") as gone:
                 w._on_close()
             self.assertTrue(info.called)
-            self.assertIn("password window", info.call_args[0][1])
+            self.assertIn("still being started", info.call_args[0][1])
             self.assertFalse(gone.called)
             self.assertTrue(w.winfo_exists())
             w._bg_starting = False
             self.finish()
         self.run_case(check)
 
-    def test_closing_is_allowed_again_once_the_prompt_is_over(self):
+    def test_closing_is_allowed_again_once_the_start_is_over(self):
         def check(w):
             w._bg_starting = True
             with mock.patch.object(app_messagebox(), "showerror"):
@@ -699,7 +709,7 @@ class RunInBackground(BackgroundGui):
             self.finish()
         self.run_case(check)
 
-    def test_a_double_start_does_not_open_a_second_prompt(self):
+    def test_a_double_start_does_not_start_a_second_scan(self):
         report = os.path.join(self.d, "r.html")
         release = threading.Event()
         self.addCleanup(release.set)

@@ -1,305 +1,17 @@
+"""Background scans: started as your own process (no password, no administrator), followed
+through a status file, ended, removed, and reported by a desktop notification. No test starts
+a real process, service or scheduled task except WholeCommand, which runs the exact worker."""
 import json
 import os
-import re
+import plistlib
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-import xml.etree.ElementTree as ET
 from unittest import mock
 
-from tests.helpers import app
-
-NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
-
-
-def windows_argv(line):
-    """Splits a command line by the rules Windows programs use (CommandLineToArgvW)."""
-    args, cur, i, in_quotes, have = [], [], 0, False, False
-    while i < len(line):
-        c = line[i]
-        if c == "\\":
-            n = 0
-            while i < len(line) and line[i] == "\\":
-                n += 1
-                i += 1
-            if i < len(line) and line[i] == '"':
-                cur.append("\\" * (n // 2))
-                have = True
-                if n % 2:
-                    cur.append('"')
-                    i += 1
-            else:
-                cur.append("\\" * n)
-                have = True
-            continue
-        if c == '"':
-            in_quotes = not in_quotes
-            have = True
-        elif c in " \t" and not in_quotes:
-            if have or cur:
-                args.append("".join(cur))
-            cur, have = [], False
-        else:
-            cur.append(c)
-            have = True
-        i += 1
-    if have or cur:
-        args.append("".join(cur))
-    return args
-
-
-class Mapped(unittest.TestCase):
-    def test_network_drive_letter_is_mapped(self):
-        self.assertTrue(app.is_mapped_drive("Z:\\data", drive_type=lambda d: 4))
-
-    def test_local_drive_and_unc_are_not(self):
-        self.assertFalse(app.is_mapped_drive("C:\\data", drive_type=lambda d: 3))
-        self.assertFalse(app.is_mapped_drive("\\\\srv\\share", drive_type=lambda d: 4))
-        self.assertFalse(app.is_mapped_drive("/srv/share", drive_type=lambda d: 4))
-
-    def test_forward_slashes_and_long_path_prefix_are_still_mapped(self):
-        self.assertTrue(app.is_mapped_drive("Z:/data/r.html", drive_type=lambda d: 4))
-        self.assertTrue(app.is_mapped_drive("\\\\?\\Z:\\data", drive_type=lambda d: 4))
-        self.assertFalse(app.is_mapped_drive("\\\\?\\UNC\\srv\\s", drive_type=lambda d: 4))
-
-    def test_asks_windows_about_the_drive_root(self):
-        seen = []
-        app.is_mapped_drive("z:\\data", drive_type=lambda d: seen.append(d) or 3)
-        self.assertEqual(seen, ["Z:\\"])
-
-    @unittest.skipIf(sys.platform == "win32", "elsewhere there are no drive letters")
-    def test_without_windows_nothing_is_mapped(self):
-        self.assertFalse(app.is_mapped_drive("Z:\\data"))
-
-
-class Xml(unittest.TestCase):
-    def test_runs_when_logged_off_with_no_time_limit(self):
-        root = ET.fromstring(app.build_task_xml("C:\\T\\TreeRot-cli.exe",
-                                                ["\\\\srv\\שיתוף", "--from", "2024-01-01"],
-                                                "DOM\\me"))
-        self.assertEqual(root.find("t:Principals/t:Principal/t:UserId", NS).text, "DOM\\me")
-        self.assertEqual(root.find("t:Principals/t:Principal/t:LogonType", NS).text, "Password")
-        self.assertEqual(root.find("t:Settings/t:ExecutionTimeLimit", NS).text, "PT0S")
-        self.assertEqual(root.find("t:Settings/t:DisallowStartIfOnBatteries", NS).text, "false")
-        self.assertEqual(root.find("t:Actions/t:Exec/t:Command", NS).text, "C:\\T\\TreeRot-cli.exe")
-        self.assertIn("שיתוף", root.find("t:Actions/t:Exec/t:Arguments", NS).text)
-
-    def test_special_characters_are_escaped(self):
-        ET.fromstring(app.build_task_xml("x.exe", ["a&b<c>"], "me"))
-
-    def test_every_value_survives_the_xml_and_the_command_line(self):
-        nasty = ["\\\\srv\\שיתוף עם רווח\\", "a&b<c>", 'he said "hi"', "it's", "]]>", "&amp;",
-                 "C:\\Program Files\\x\\", "trailing\\\\", "", "tab\there", "100%", "*.tmp",
-                 "{braces}", "emoji \U0001F600"]
-        for value in nasty:
-            with self.subTest(value=value):
-                root = ET.fromstring(app.build_task_xml(
-                    "C:\\Program Files & Co\\<T>\\TreeRot-cli.exe", ["--exclude", value], "D&M\\m<e"))
-                self.assertEqual(root.find("t:Actions/t:Exec/t:Command", NS).text,
-                                 "C:\\Program Files & Co\\<T>\\TreeRot-cli.exe")
-                self.assertEqual(root.find("t:Principals/t:Principal/t:UserId", NS).text, "D&M\\m<e")
-                line = root.find("t:Actions/t:Exec/t:Arguments", NS).text
-                self.assertEqual(windows_argv(line), ["--exclude", value])
-
-    def test_a_value_xml_cannot_carry_is_refused_not_changed(self):
-        for value in ("a\x01b", "a\nb", "a\rb", "a\ud800b"):
-            with self.subTest(value=value), self.assertRaises(app.BackgroundError):
-                app.build_task_xml("x.exe", ["--exclude", value], "me")
-
-    def test_text_task_scheduler_would_expand_is_refused_not_changed(self):
-        for value, named in (("%TEMP%", "%TEMP%"), ("a%USERNAME%b", "%USERNAME%"), ("$(Arg0)", "$(Arg0)"),
-                             ("x$(Arg12)y", "$(Arg12)"), ("$(anything)", "$(anything)")):
-            with self.subTest(value=value), self.assertRaises(app.BackgroundError) as c:
-                app.build_task_xml("x.exe", ["--exclude=" + value], "me")
-            self.assertIn(named, str(c.exception))
-        with self.assertRaises(app.BackgroundError):
-            app.build_task_xml("C:\\%TEMP%\\x.exe", [], "me")
-        with self.assertRaises(app.BackgroundError):      # they meet once the line is joined
-            app.build_task_xml("x.exe", ["50%", "60%"], "me")
-
-    def test_percent_and_dollar_that_cannot_expand_pass(self):
-        for value in ("100%", "$5", "cost$", "(x)", "$ (y)"):
-            with self.subTest(value=value):
-                root = ET.fromstring(app.build_task_xml("x.exe", [value], "me"))
-                self.assertEqual(windows_argv(root.find("t:Actions/t:Exec/t:Arguments", NS).text), [value])
-
-    def test_no_trigger_so_no_start_time_can_pass_while_the_password_is_typed(self):
-        root = ET.fromstring(app.build_task_xml("x.exe", [], "me"))
-        self.assertIsNone(root.find("t:Triggers", NS))
-        self.assertEqual(root.find("t:Settings/t:AllowStartOnDemand", NS).text, "true")
-        self.assertEqual(root.find("t:Settings/t:Enabled", NS).text, "true")
-
-    def test_logon_type_can_be_chosen_for_the_build_machine(self):
-        root = ET.fromstring(app.build_task_xml("x.exe", [], "me", logon_type="S4U"))
-        self.assertEqual(root.find("t:Principals/t:Principal/t:LogonType", NS).text, "S4U")
-
-    def test_has_no_place_for_a_password(self):
-        text = app.build_task_xml("x.exe", ["a"], "me")
-        root = ET.fromstring(text)
-        tags = [e.tag.split("}")[1].lower() for e in root.iter()]
-        self.assertFalse([t for t in tags if "password" in t])
-
-    def test_written_as_utf16_it_is_still_valid(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = os.path.join(d, "t.xml")
-            app.write_task_xml(p, app.build_task_xml("x.exe", ["\\\\srv\\שיתוף&"], "me"))
-            with open(p, "rb") as f:
-                raw = f.read()
-            self.assertIn(raw[:2], (b"\xff\xfe", b"\xfe\xff"))
-            self.assertIn("שיתוף&", ET.fromstring(raw).find("t:Actions/t:Exec/t:Arguments", NS).text)
-
-
-class Command(unittest.TestCase):
-    def test_from_source_runs_this_script_with_python(self):
-        exe, args = app.background_command("\\\\srv\\s", ["--from", "2024-01-01"], "C:\\s.json")
-        self.assertEqual(exe, sys.executable)
-        self.assertEqual(os.path.basename(args[0]), os.path.basename(app.__file__))
-        self.assertTrue(os.path.isabs(args[0]))
-        self.assertEqual(args[1:], ["\\\\srv\\s", "--from", "2024-01-01",
-                                    "--progress", "none", "--status-file", "C:\\s.json"])
-
-    def test_from_source_refuses_when_python_cannot_be_found(self):
-        with mock.patch.object(app.sys, "executable", ""), self.assertRaises(app.BackgroundError):
-            app.background_command("\\\\srv\\s", [], "s.json")
-
-    def test_frozen_uses_the_cli_next_to_the_window_exe(self):
-        with tempfile.TemporaryDirectory() as d:
-            cli = os.path.join(d, "TreeRot-cli.exe")
-            open(cli, "w").close()
-            with mock.patch.object(app.sys, "frozen", True, create=True), \
-                    mock.patch.object(app.sys, "executable", os.path.join(d, "TreeRot.exe")):
-                exe, args = app.background_command("\\\\srv\\s", [], "s.json")
-            self.assertEqual(exe, cli)
-            self.assertEqual(args[0], "\\\\srv\\s")
-
-    def test_frozen_without_the_cli_is_refused_by_name(self):
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(app.sys, "frozen", True, create=True), \
-                    mock.patch.object(app.sys, "executable", os.path.join(d, "TreeRot.exe")), \
-                    self.assertRaises(app.BackgroundError) as c:
-                app.background_command("\\\\srv\\s", [], "s.json")
-            self.assertIn("TreeRot-cli.exe", str(c.exception))
-
-    def test_schtasks_is_named_in_full_on_windows(self):
-        # A schtasks.exe dropped in the current folder must never be the one given the console.
-        path = app.schtasks_exe(platform="win32", environ={"SystemRoot": "D:\\Win"})
-        self.assertEqual(path, "D:\\Win\\System32\\schtasks.exe")
-        self.assertEqual(app.schtasks_exe(platform="win32", environ={}),
-                         "C:\\Windows\\System32\\schtasks.exe")
-
-
-class Arguments(unittest.TestCase):
-    def test_every_setting_reaches_the_scan(self):
-        args = app.background_args("2024-01-01", "2024-12-31", ["a"], created=False,
-                                   follow_symlinks=True, precount=True)
-        a = app.build_parser().parse_args(["x"] + args)
-        self.assertEqual(a.date_from.strftime("%Y-%m-%d"), "2024-01-01")
-        self.assertEqual(a.date_to.strftime("%Y-%m-%d"), "2024-12-31")
-        self.assertEqual(a.exclude, ["a"])
-        self.assertEqual(a.created, "off")
-        self.assertTrue(a.follow_symlinks)
-        self.assertTrue(a.precount)
-        self.assertTrue(a.quiet)
-
-    def test_optional_settings_stay_out_when_off(self):
-        args = app.background_args("", "2024-12-31", [], created=True,
-                                   follow_symlinks=False, precount=False)
-        a = app.build_parser().parse_args(["x"] + args)
-        self.assertIsNone(a.date_from)
-        self.assertIsNone(a.exclude)
-        self.assertEqual(a.created, "auto")
-        self.assertFalse(a.follow_symlinks)
-        self.assertFalse(a.precount)
-
-    def test_exclusions_reach_the_scan_unchanged(self):
-        excludes = ["-starts-with-dash", "--from", "a=b", "with space", "שיתוף", 'q"uote', "a&b<c>",
-                    "*.tmp", "\\\\srv\\s\\old\\", "it's", " padded "]
-        args = app.background_args("2024-01-01", "", excludes, created=True,
-                                   follow_symlinks=False, precount=False)
-        root = ET.fromstring(app.build_task_xml("x.exe", ["\\\\srv\\s"] + args, "me"))
-        argv = windows_argv(root.find("t:Actions/t:Exec/t:Arguments", NS).text)
-        a = app.build_parser().parse_args(argv)
-        self.assertEqual(a.exclude, excludes)
-        self.assertEqual(a.path, "\\\\srv\\s")
-
-
-class FolderCheck(unittest.TestCase):
-    def test_mapped_missing_and_good_folders(self):
-        with tempfile.TemporaryDirectory() as d:
-            self.assertIsNone(app.check_background_folder(d))
-            self.assertIn("not reachable", app.check_background_folder(os.path.join(d, "no")))
-            with mock.patch.object(app, "is_mapped_drive", return_value=True):
-                self.assertIn("\\\\server\\share", app.check_background_folder(d))
-
-
-class CreateCommand(unittest.TestCase):
-    def test_the_exact_line(self):
-        line = app.task_create_command("TreeRot-20260101-000000-abcd", "20260101-000000-abcd.xml",
-                                       "DOM\\me", platform="win32", environ={"SystemRoot": "D:\\Win"})
-        self.assertEqual(
-            line,
-            '"D:\\Win\\System32\\cmd.exe" /d /c ""D:\\Win\\System32\\schtasks.exe" /Create '
-            '/TN TreeRot-20260101-000000-abcd /XML 20260101-000000-abcd.xml /RU "DOM\\me" /RP * '
-            '|| (pause & exit /b 1)"')
-
-    def test_a_user_name_with_a_space_or_other_letters_is_fine(self):
-        line = app.task_create_command("T", "x.xml", "דומיין\\First Last", platform="win32", environ={})
-        self.assertIn('/RU "דומיין\\First Last" /RP *', line)
-
-    def test_a_user_name_cmd_could_misread_is_refused_with_the_way_out(self):
-        for bad in ('me"', "me%x%", "a&b", "a^b", "a|b", "a<b", "a>b", "a\nb"):
-            with self.subTest(bad=bad), self.assertRaises(app.BackgroundError) as c:
-                app.task_create_command("T", "x.xml", bad, platform="win32", environ={})
-            self.assertIn("user name", str(c.exception))
-            self.assertIn("README", str(c.exception))
-
-    def test_a_system_folder_cmd_could_misread_is_refused(self):
-        with self.assertRaises(app.BackgroundError):
-            app.task_create_command("T", "x.xml", "me", platform="win32", environ={"SystemRoot": "C:\\a&b"})
-
-    def test_cmd_is_named_in_full_on_windows(self):
-        self.assertEqual(app.cmd_exe(platform="win32", environ={"SystemRoot": "D:\\Win"}),
-                         "D:\\Win\\System32\\cmd.exe")
-
-
-class Consoles(unittest.TestCase):
-    """How schtasks is started. subprocess.run is replaced: it never really runs."""
-
-    def test_password_console_is_real_and_nothing_captures_it(self):
-        with mock.patch.object(app.subprocess, "run") as run, \
-                mock.patch.object(app.sys, "platform", "win32"):
-            app._console_run("the line", cwd="C:\\jobs")
-        self.assertEqual(run.call_args[0], ("the line",))         # one string, not re-quoted
-        self.assertEqual(run.call_args[1], {"cwd": "C:\\jobs",
-                                            "creationflags": 0x00000010})  # CREATE_NEW_CONSOLE
-
-    def test_quiet_run_cannot_hang_and_shows_no_window(self):
-        with mock.patch.object(app.subprocess, "run") as run, \
-                mock.patch.object(app.sys, "platform", "win32"):
-            app._quiet_run(["schtasks", "/Query"])
-        kw = run.call_args[1]
-        self.assertEqual(kw.get("creationflags"), 0x08000000)     # CREATE_NO_WINDOW
-        self.assertEqual(kw.get("stdin"), subprocess.DEVNULL)
-        self.assertTrue(kw.get("timeout"))
-
-    def test_a_schtasks_that_does_not_answer_is_an_error_not_an_answer(self):
-        def slow(cmd, **kw):
-            raise subprocess.TimeoutExpired(cmd, 1)
-        with mock.patch.object(app.subprocess, "run", slow), \
-                mock.patch.object(app.sys, "platform", "win32"), \
-                self.assertRaises(app.BackgroundError):
-            app._quiet_run(["schtasks"])
-
-    def test_neither_runs_outside_windows(self):
-        with mock.patch.object(app.subprocess, "run") as run, \
-                mock.patch.object(app.sys, "platform", "darwin"):
-            with self.assertRaises(app.BackgroundError):
-                app._console_run("schtasks", cwd=".")
-            with self.assertRaises(app.BackgroundError):
-                app._quiet_run(["schtasks"])
-        run.assert_not_called()
+from tests.helpers import WINDOWS_RUN_VALUES, app
 
 
 def refusing_scheduler(cmd, **kw):
@@ -309,34 +21,72 @@ def refusing_scheduler(cmd, **kw):
     if "/Query" in cmd:
         listing = '"\\%s","N/A","Ready"\r\n' % refusing_scheduler.name
         return subprocess.CompletedProcess(cmd, 0, listing.encode(), b"")
-    return subprocess.CompletedProcess(cmd, 0 if "/Create" in cmd else 1, b"", b"Access is denied.")
+    return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
+
+
+def done(cmd, rc=0, out=b""):
+    return subprocess.CompletedProcess(cmd, rc, out, b"")
 
 
 class JobCase(unittest.TestCase):
+    """Jobs are started for real except the process itself: spawn, the process table and every
+    system tool are fakes, so nothing outside the temp folder is touched."""
+
     def setUp(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         self.d = d.name
-        p = mock.patch.object(app, "JOBS_DIR", os.path.join(d.name, "jobs"))
-        p.start()
-        self.addCleanup(p.stop)
-        for name in ("_quiet_run", "_console_run"):      # never the real schtasks, on any system
-            q = mock.patch.object(app, name, side_effect=app.BackgroundError("not in a test"))
-            q.start()
-            self.addCleanup(q.stop)
-        e = mock.patch.dict(os.environ, {"USERNAME": "me", "USERDOMAIN": "DOM"})
-        e.start()
-        self.addCleanup(e.stop)
-        self.cmds = []
+        self.procs = {}                # pid -> start time: the fake process table
+        self.spawned, self.stopped, self.cmds = [], [], []
+        patches = [
+            mock.patch.object(app, "JOBS_DIR", os.path.join(d.name, "jobs")),
+            mock.patch.object(app, "AUTOSTART_DIR", os.path.join(d.name, "autostart")),
+            mock.patch.object(app, "LAUNCH_AGENTS_DIR", os.path.join(d.name, "agents")),
+            # never the real schtasks, process launcher or process killer, on any system
+            mock.patch.object(app, "_quiet_run", side_effect=app.BackgroundError("not in a test")),
+            mock.patch.object(app, "_spawn_detached", side_effect=AssertionError("real spawn")),
+            mock.patch.object(app, "_run_tool", side_effect=AssertionError("real tool")),
+            mock.patch.object(app, "process_start", self.fake_start),
+            mock.patch.object(app, "stop_process", self.fake_stop),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        WINDOWS_RUN_VALUES.clear()
+        self.addCleanup(WINDOWS_RUN_VALUES.clear)
+
+    def fake_start(self, pid, platform=None, run=None):
+        return self.procs.get(pid)
+
+    def fake_stop(self, pid, start, platform=None):
+        self.stopped.append(pid)
+        return self.procs.pop(pid, None) is not None
+
+    def fake_spawn(self, cmd):
+        self.spawned.append(cmd)
+        pid = 4000 + len(self.spawned)
+        self.procs[pid] = f"start-{pid}"
+        return pid
 
     def run_ok(self, cmd, **kw):
         self.cmds.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        return done(cmd)
 
-    def start(self, report="r.html", args=("--from", "2024-01-01")):
-        self.cmds = []
-        return app.start_background_scan("\\\\srv\\s", list(args),
-                                         os.path.join(self.d, report), runner=self.run_ok)
+    def start(self, report="r.html", args=("--from", "2024-01-01"), platform="win32", runner=None):
+        return app.start_background_scan(self.d, list(args), os.path.join(self.d, report),
+                                         runner=runner or self.run_ok, spawn=self.fake_spawn,
+                                         platform=platform)
+
+    def legacy(self, report="old.html", **fields):
+        """A scheduled-task record written by a version before this one."""
+        job_id = f"20250101-000000-{os.urandom(2).hex()}"
+        path = os.path.join(self.d, report)
+        job = {"id": job_id, "task": app.TASK_PREFIX + job_id, "root": "\\\\srv\\s",
+               "report": path, "status_file": path + app.STATUS_SUFFIX, "started": time.time()}
+        job.update(fields)
+        os.makedirs(app.JOBS_DIR, exist_ok=True)
+        app._save_job(job)
+        return job
 
     def write_status(self, job, **fields):
         data = {"state": "running", "percent": "5%", "counts": "c", "times": "t",
@@ -346,445 +96,231 @@ class JobCase(unittest.TestCase):
             json.dump(data, f)
 
 
-class Jobs(JobCase):
-    def test_password_is_prompted_by_windows_and_task_started(self):
-        job = self.start()
-        create = self.cmds[0]
-        self.assertIn("/RP * ", create)
-        self.assertIn("/XML", create)
-        self.assertIn("/Run", self.cmds[1])
-        self.assertEqual(app.load_jobs()[0]["task"], job["task"])
+class Command(unittest.TestCase):
+    def test_from_source_runs_this_script_with_python(self):
+        with mock.patch.object(app.sys, "frozen", False, create=True):
+            cmd = app.worker_command("/data", ["--from", "2024-01-01"], "/r.html.status.json", "ID")
+        self.assertEqual(cmd[1], os.path.abspath(app.__file__))
+        self.assertEqual(cmd[2:], ["/data", "--from", "2024-01-01", "--progress", "none",
+                                   "--status-file", "/r.html.status.json", "--job-id", "ID"])
 
-    def test_no_password_in_job_record(self):
-        self.start()
-        names = os.listdir(app.JOBS_DIR)
-        for n in names:
-            if n.endswith(".json"):
-                with open(os.path.join(app.JOBS_DIR, n), encoding="utf-8") as f:
-                    self.assertNotIn("password", f.read().lower())
+    def test_frozen_runs_the_one_program_itself(self):
+        with tempfile.NamedTemporaryFile() as exe, \
+                mock.patch.object(app.sys, "frozen", True, create=True), \
+                mock.patch.object(app.sys, "executable", exe.name):
+            self.assertEqual(app.self_command(), [exe.name])
 
-    def test_a_share_that_died_at_the_prompt_is_refused_and_the_old_result_stays_put(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        status = first["status_file"]
-        real, cmds = os.remove, []
+    def test_refuses_when_the_program_cannot_be_found(self):
+        with mock.patch.object(app.sys, "executable", ""):
+            with self.assertRaises(app.BackgroundError):
+                app.self_command()
 
-        def dead_share(path, *a, **kw):        # a dead share reads as "no such file"
-            if path == status:
-                raise FileNotFoundError(2, "No such file or directory", path)
-            return real(path, *a, **kw)
-        isdir = os.path.isdir
-        folder = os.path.dirname(first["report"])
+    def test_the_worker_options_are_hidden_but_parsed(self):
+        a = app.build_parser().parse_args(["/x", "--job-id", "ID", "--status-file", "s"])
+        self.assertEqual(a.job_id, "ID")
+        self.assertTrue(app.build_parser().parse_args(["--login-check"]).login_check)
+        self.assertNotIn("--job-id", app.build_parser().format_help())
 
-        def runner(cmd, **kw):
-            cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        checks = iter([True])                  # reachable when the scan was asked for, then not
 
-        def reachable(path):
-            return next(checks, False) if path == folder else isdir(path)
-        with mock.patch.object(app.os, "remove", dead_share), \
-                mock.patch.object(app.os.path, "isdir", reachable), \
-                self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], first["report"], runner=runner)
-        self.assertIn("not reachable", str(c.exception))
-        self.assertFalse(any("/Run" in cmd for cmd in cmds), cmds)
-        self.assertTrue(any("/Delete" in cmd for cmd in cmds), cmds)     # the new task is taken back
-        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
+class Arguments(unittest.TestCase):
+    def test_settings_become_arguments(self):
+        args = app.background_args("2024-01-01", "2024-12-31", ["-odd", "x"], created=False,
+                                   follow_symlinks=True, precount=True)
+        self.assertEqual(args, ["--format", "summary", "-q", "--from", "2024-01-01",
+                                "--to", "2024-12-31", "--exclude=-odd", "--exclude=x",
+                                "--created", "off", "--follow-symlinks", "--precount"])
+        a = app.build_parser().parse_args(["/x"] + args)
+        self.assertEqual(a.exclude, ["-odd", "x"])
 
-    def test_a_status_file_that_is_really_gone_is_no_obstacle(self):
-        job = self.start()
-        self.assertFalse(os.path.exists(job["status_file"]))
-        self.assertTrue(any("/Run" in cmd for cmd in self.cmds))
 
-    def test_a_date_that_cannot_be_used_never_reaches_the_prompt(self):
-        cmds = []
+class FolderCheck(unittest.TestCase):
+    def test_missing_and_good_folders(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(app.check_background_folder(d))
+            self.assertIn("does not exist", app.check_background_folder(os.path.join(d, "no")))
 
-        def runner(cmd, **kw):
-            cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        for args, message in ((["--from", "0001-01-01"], app.DATE_RANGE_MSG),
-                              (["--from", "2024-01-01", "--to", "0001-01-01"], app.DATE_RANGE_MSG),
-                              (["--from", "nonsense"], app.DATE_FORMAT_MSG)):
-            with self.subTest(args=args), self.assertRaises(app.BackgroundError) as c:
-                app.start_background_scan("\\\\srv\\s", args, os.path.join(self.d, "r.html"),
-                                          runner=runner)
-            self.assertEqual(str(c.exception), message)
-        self.assertEqual(cmds, [])
-        self.assertEqual(app.load_jobs(), [])
+    def test_file_manager_shares_are_recognised_on_linux_only(self):
+        gvfs = "/run/user/1000/gvfs/smb-share:server=nas,share=data/projects"
+        self.assertTrue(app.is_file_manager_share(gvfs, "linux"))
+        self.assertTrue(app.is_file_manager_share("/run/user/1000/gvfs/x", "linux"))
+        for path in ("/mnt/nas/data", "/run/user/1000/other", "/home/u/gvfs/x"):
+            self.assertFalse(app.is_file_manager_share(path, "linux"), path)
+        self.assertFalse(app.is_file_manager_share(gvfs, "darwin"))
+        self.assertFalse(app.is_file_manager_share(gvfs, "win32"))
 
-    def test_a_date_windows_refuses_never_reaches_the_prompt(self):
-        cmds = []
 
-        def runner(cmd, **kw):
-            cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        with mock.patch.object(app, "period_bounds", side_effect=ValueError("x")), \
-                self.assertRaises(app.BackgroundError):
-            app.start_background_scan("\\\\srv\\s", ["--from", "1900-01-01"],
-                                      os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(cmds, [])
+class StartProcess(JobCase):
+    def test_windows_and_macos_start_a_detached_copy_with_no_password(self):
+        for platform in ("win32", "darwin"):
+            with self.subTest(platform):
+                job = self.start(f"{platform}.html", platform=platform)
+                self.assertEqual(job["kind"], "process")
+                self.assertEqual(job["pid"], 4000 + len(self.spawned))
+                self.assertEqual(job["pid_start"], f"start-{job['pid']}")
+                self.assertEqual(job["logoff"], "stops")
+                cmd = self.spawned[-1]
+                self.assertEqual(cmd[cmd.index("--job-id") + 1], job["id"])
+                self.assertEqual(cmd[cmd.index("--status-file") + 1], job["status_file"])
+                self.assertEqual(cmd[cmd.index("--report") + 1], job["report"])
+        self.assertEqual(self.cmds, [])                  # no scheduler, no tool at all
 
-    def test_an_exclusion_named_like_a_date_option_is_not_read_as_a_date(self):
-        job = app.start_background_scan(
-            "\\\\srv\\s", app.background_args("2024-01-01", "", ["--from", "--to"]),
-            os.path.join(self.d, "r.html"), runner=self.run_ok)
-        self.assertTrue(job["id"])
-
-    def test_a_failed_create_deletes_any_task_then_forgets_it(self):
-        cmds = []
-
-        def runner(cmd, **kw):
-            cmds.append(cmd)
-            if "/Query" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, b'"\\Other","N/A","Ready"\r\n', b"")
-            return subprocess.CompletedProcess(cmd, 1, b"", b"x")
-        with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertIn("could not be created", str(c.exception))
-        self.assertTrue(any("/Delete" in cmd for cmd in cmds), cmds)
-        self.assertEqual(app.load_jobs(), [])
-
-    def test_a_failed_create_that_may_have_left_a_task_keeps_the_record(self):
-        names = []
-
-        def runner(cmd, **kw):
-            if "/Delete" in cmd:
-                names.append(cmd[cmd.index("/TN") + 1])
-            if "/Query" in cmd:
-                listing = '"\\%s","N/A","Ready"\r\n' % names[-1]
-                return subprocess.CompletedProcess(cmd, 0, listing.encode(), b"")
-            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
-        with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertIn("Background scans", str(c.exception))
-        jobs = app.load_jobs()
-        self.assertEqual(len(jobs), 1)
-        self.assertNotIn("creating", jobs[0])                # Remove must work on it
-
-    def test_a_failed_create_where_the_list_cannot_be_read_keeps_the_record(self):
-        def runner(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
-        with self.assertRaises(app.BackgroundError):
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_create_failure_raises_with_windows_message(self):
-        def fail(cmd, **kw):
-            if "/Query" in cmd:                  # Windows answers: no such task
-                return subprocess.CompletedProcess(cmd, 0, b"", b"")
-            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
-        with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=fail)
-        self.assertIn("could not be created", str(c.exception))
-        text = str(c.exception)
-        self.assertIn("console window that just closed", text)   # it is gone by now
-        self.assertNotIn("is in the console window", text)
-        self.assertIn("Try again", text)
-        self.assertIn("Set up a background scan by hand", text)
-        self.assertEqual(app.load_jobs(), [])
-
-    def test_states(self):
-        job = self.start()
-        self.assertEqual(app.job_state(job)[0], "starting")
-        self.write_status(job)
-        self.assertEqual(app.job_state(job)[0], "running")
-        self.write_status(job, updated=time.time() - 3600)
-        self.assertEqual(app.job_state(job)[0], "stalled")
-        self.write_status(job, state="finished", report="r", percent="")
-        self.assertEqual(app.job_state(job)[0], "finished")
-
-    def test_remove_deletes_task_and_record(self):
-        job = self.start()
-        self.cmds = []
-        app.remove_job(job, runner=self.run_ok)
-        self.assertIn("/Delete", self.cmds[0])
-        self.assertEqual(app.load_jobs(), [])
-
-    # ---- the password
-
-    def test_create_has_the_prompt_and_never_a_password_anywhere(self):
-        with mock.patch.dict(os.environ, {"TREEROT_SECRET_PROBE": "x"}):
-            self.start()
-        create = self.cmds[0]
-        self.assertEqual(create.count("/RP"), 1)
-        self.assertIn('/RU "DOM\\me" /RP * ', create)
-        self.assertIn("/TN %s " % app.load_jobs()[0]["task"], create)
-        self.assertNotIn("/F", create)         # a name collision may never overwrite a task
-
-    def test_runner_gets_no_input_or_pipes(self):
+    def test_the_record_is_saved_before_the_process_starts(self):
         seen = []
 
-        def runner(cmd, **kw):
-            seen.append(kw)
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(seen[0], {"cwd": app.JOBS_DIR})    # and nothing that could capture
+        def spawn(cmd):
+            seen.append([j["id"] for j in app.load_jobs()])
+            return self.fake_spawn(cmd)
+        job = app.start_background_scan(self.d, [], os.path.join(self.d, "r.html"),
+                                        runner=self.run_ok, spawn=spawn, platform="win32")
+        self.assertEqual(seen, [[job["id"]]])
+        self.assertEqual(app.load_jobs()[0]["pid"], job["pid"])
 
-    def test_task_xml_is_passed_by_file_and_then_removed(self):
-        seen = {}
-
-        def runner(cmd, **kw):
-            if "/Create" in cmd:
-                name = re.search(r"/XML (\S+) ", cmd).group(1)
-                self.assertRegex(name, r"\A[0-9a-f-]+\.xml\Z")    # plain ASCII, nothing to quote
-                with open(os.path.join(kw["cwd"], name), "rb") as f:
-                    seen["xml"] = f.read()
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        root = ET.fromstring(seen["xml"])
-        argv = windows_argv(root.find("t:Actions/t:Exec/t:Arguments", NS).text)
-        self.assertIn("\\\\srv\\s", argv)
-        self.assertEqual(argv[argv.index("--status-file") + 1], job["status_file"])
-        self.assertEqual(argv[argv.index("--report") + 1], job["report"])
-        self.assertEqual([n for n in os.listdir(app.JOBS_DIR) if not n.endswith(".json")], [])
-
-    def test_no_user_name_is_refused_before_any_prompt(self):
-        with mock.patch.dict(os.environ, {"USERNAME": ""}), self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual(self.cmds, [])
-
-    def test_local_account_without_a_domain(self):
-        env = {k: v for k, v in os.environ.items() if k != "USERDOMAIN"}
-        with mock.patch.dict(os.environ, env, clear=True):
-            self.start()
-        self.assertIn('/RU "me" /RP * ', self.cmds[0])
-
-    def test_unsafe_user_name_stops_before_any_prompt_or_record(self):
-        with mock.patch.dict(os.environ, {"USERNAME": "a&b"}), self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual(self.cmds, [])
+    def test_a_process_that_will_not_start_leaves_nothing_behind(self):
+        def spawn(cmd):
+            raise OSError("no such program")
+        with self.assertRaises(app.BackgroundError) as c:
+            app.start_background_scan(self.d, [], os.path.join(self.d, "r.html"),
+                                      runner=self.run_ok, spawn=spawn, platform="win32")
+        self.assertIn("no such program", str(c.exception))
         self.assertEqual(app.load_jobs(), [])
+        self.assertEqual(WINDOWS_RUN_VALUES, {})
 
-    def test_a_jobs_folder_cmd_cannot_stand_in_is_refused_before_any_prompt(self):
-        # cmd.exe will not use a \\\\server\\share folder as its working folder.
-        with mock.patch.object(app, "JOBS_DIR", "\\\\srv\\home\\.treerot\\jobs"), \
-                self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual(self.cmds, [])
-
-    # ---- paths
-
-    def test_mapped_drives_are_refused_for_folder_and_report(self):
-        def is_mapped(path, drive_type=None):
-            return path.startswith("Z:")
-        with mock.patch.object(app, "is_mapped_drive", is_mapped):
-            for root, report in (("Z:\\data", os.path.join(self.d, "r.html")),
-                                 ("\\\\srv\\s", "Z:\\out\\r.html")):
-                with self.subTest(root=root, report=report), \
-                        self.assertRaises(app.BackgroundError) as c:
-                    app.start_background_scan(root, [], report, runner=self.run_ok)
-                self.assertIn("\\\\server\\share", str(c.exception))
-        self.assertEqual(self.cmds, [])
+    def test_bad_input_is_refused_before_anything_starts(self):
+        for report, args, words in (("r.txt", [], ".html"),
+                                    (os.path.join("no", "r.html"), [], "does not exist"),
+                                    ("r.html", ["--from", "2024-13-01"], "")):
+            with self.subTest(report=report, args=args), self.assertRaises(app.BackgroundError) as c:
+                self.start(report, args=args)
+            self.assertIn(words, str(c.exception))
+        self.assertEqual(self.spawned, [])
         self.assertEqual(app.load_jobs(), [])
-
-    def test_mapped_drive_cannot_hide_behind_a_short_path(self):
-        # With a mapped current drive, these only show their drive letter once made full.
-        def full(path):
-            return "Z:\\data" if path == "\\data" else "Z:\\work\\" + path
-
-        def is_mapped(path, drive_type=None):
-            return path.startswith("Z:")
-        good = os.path.join(self.d, "r.html")
-        with mock.patch.object(app, "is_mapped_drive", is_mapped), \
-                mock.patch.object(app.os.path, "abspath", full):
-            for short in ("data", "\\data"):
-                with self.subTest(short=short):
-                    self.assertIn("\\\\server\\share", app.check_background_folder(short))
-                    with self.assertRaises(app.BackgroundError) as c:
-                        app.start_background_scan(short, [], "\\\\srv\\s\\r.html", runner=self.run_ok)
-                    self.assertIn("\\\\server\\share", str(c.exception))
-                    with self.assertRaises(app.BackgroundError) as c:
-                        app.start_background_scan("\\\\srv\\s", [], short + ".html", runner=self.run_ok)
-                    self.assertIn("\\\\server\\share", str(c.exception))
-        self.assertEqual(self.cmds, [])
 
     def test_relative_paths_become_full_ones(self):
-        cwd = os.getcwd()
         os.chdir(self.d)
-        self.addCleanup(os.chdir, cwd)
-        job = app.start_background_scan("data", [], "r.html", runner=self.run_ok)
+        self.addCleanup(os.chdir, os.path.dirname(self.d))
+        job = app.start_background_scan(".", [], "r.html", runner=self.run_ok,
+                                        spawn=self.fake_spawn, platform="win32")
         self.assertTrue(os.path.isabs(job["root"]))
         self.assertTrue(os.path.isabs(job["report"]))
-        self.assertTrue(os.path.isabs(job["status_file"]))
 
-    def test_report_folder_that_does_not_exist_is_refused(self):
-        with self.assertRaises(app.BackgroundError):
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "no", "r.html"),
-                                      runner=self.run_ok)
-        self.assertEqual(self.cmds, [])
+    def test_an_old_status_file_is_gone_before_the_scan_starts(self):
+        path = os.path.join(self.d, "r.html.status.json")
+        with open(path, "w") as f:
+            f.write('{"state": "finished"}')
+        seen = []
 
-    def test_tasks_sit_in_the_root_of_task_scheduler(self):
-        # A standard user may not be allowed to create a task folder.
+        def spawn(cmd):
+            seen.append(os.path.exists(path))
+            return self.fake_spawn(cmd)
+        app.start_background_scan(self.d, [], os.path.join(self.d, "r.html"),
+                                  runner=self.run_ok, spawn=spawn, platform="win32")
+        self.assertEqual(seen, [False])
+
+    def test_a_report_another_live_scan_is_writing_is_refused(self):
         job = self.start()
-        self.assertEqual(job["task"], "TreeRot-" + job["id"])
-        self.assertNotIn("\\", job["task"])
+        self.write_status(job)
+        with self.assertRaises(app.BackgroundError):
+            self.start()
+        self.assertEqual(len(self.spawned), 1)
 
-    def test_two_jobs_in_the_same_second_get_their_own_task(self):
+    def test_a_finished_scan_of_the_same_report_is_replaced(self):
+        old = self.start()
+        self.write_status(old, state="finished", report=old["report"])
+        new = self.start()
+        self.assertEqual([j["id"] for j in app.load_jobs()], [new["id"]])
+
+    def test_two_scans_in_the_same_second_get_their_own_ids(self):
         a, b = self.start("a.html"), self.start("b.html")
-        self.assertNotEqual(a["task"], b["task"])
-        self.assertEqual(len(app.load_jobs()), 2)
+        self.assertNotEqual(a["id"], b["id"])
 
-    # ---- an old status file must not pass for this run's result
 
-    def old_status(self, report="r.html"):
-        status = os.path.join(self.d, report + ".status.json")
-        with open(status, "w", encoding="utf-8") as f:
-            json.dump({"state": "finished", "updated": 1, "report": "old", "error": ""}, f)
-        return status
+class StartSystemd(JobCase):
+    def runner(self, systemd_run=0, linger=(b"no", b"yes")):
+        lingers = list(linger)
 
-    def test_old_status_is_gone_before_the_task_can_start(self):
-        status = self.old_status()
-        present = {}
+        def run(cmd, **kw):
+            self.cmds.append(cmd)
+            if cmd[:2] == ["systemctl", "--user"] and cmd[2] == "show-environment":
+                return done(cmd)
+            if cmd[0] == "systemd-run":
+                return done(cmd, systemd_run)
+            if cmd[:2] == ["loginctl", "show-user"]:
+                return done(cmd, 0, lingers.pop(0) if len(lingers) > 1 else lingers[0])
+            return done(cmd)
+        return run
 
-        def runner(cmd, **kw):
-            present["create" if "/Create" in cmd else "run"] = os.path.exists(status)
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertFalse(present["run"])             # /Run is the only thing that starts it
-        self.assertEqual(app.job_state(job)[0], "starting")
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(app.shutil, "which", lambda name: "/usr/bin/" + name)
+        p.start()
+        self.addCleanup(p.stop)
 
-    def test_an_old_status_that_cannot_be_removed_stops_everything(self):
-        status = self.old_status()
-        real = os.remove
+    def test_linux_runs_a_user_service_and_turns_on_linger(self):
+        job = self.start(platform="linux", runner=self.runner())
+        self.assertEqual(job["kind"], "systemd")
+        self.assertEqual(job["unit"], "treerot-" + job["id"])
+        self.assertEqual(job["logoff"], "keeps")
+        run = next(c for c in self.cmds if c[0] == "systemd-run")
+        self.assertEqual(run[:4], ["systemd-run", "--user", "--unit", job["unit"]])
+        self.assertIn("--collect", run)
+        worker = run[run.index("--") + 1:]
+        self.assertEqual(worker[worker.index("--job-id") + 1], job["id"])
+        self.assertIn(["loginctl", "enable-linger"], self.cmds)
+        self.assertNotIn("sudo", [c[0] for c in self.cmds])
+        self.assertEqual(self.spawned, [])
 
-        def remove(path):
-            if path == status:
-                raise PermissionError("in use")
-            real(path)
-        with mock.patch.object(app.os, "remove", remove), \
-                self.assertRaises(app.BackgroundError) as c:
-            self.start()
-        self.assertIn(status, str(c.exception))
-        self.assertIn("in use", str(c.exception))
-        self.assertFalse([c for c in self.cmds if "/Run" in c])
-        self.assertIn("/Delete", self.cmds[-1])      # the new task does not stay behind
-        self.assertEqual(app.load_jobs(), [])
+    def test_linger_already_on_is_left_alone(self):
+        job = self.start(platform="linux", runner=self.runner(linger=(b"yes",)))
+        self.assertEqual(job["logoff"], "keeps")
+        self.assertNotIn(["loginctl", "enable-linger"], self.cmds)
 
-    def test_canceling_the_prompt_loses_nothing_from_the_earlier_scan(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        with open(first["report"], "w") as f:
-            f.write("x")
-        cmds = []
+    def test_linger_refused_means_the_scan_stops_at_logout_and_says_so(self):
+        job = self.start(platform="linux", runner=self.runner(linger=(b"no",)))
+        self.assertEqual(job["logoff"], "stops")
+        self.assertIn("log out", app.logoff_text(job, "linux"))
 
-        def cancel(cmd, **kw):
-            cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0 if "/Query" in cmd else 1, b"", b"")
-        with self.assertRaises(app.BackgroundError):
-            app.start_background_scan("\\\\srv\\s", [], first["report"], runner=cancel)
-        self.assertFalse(any("/Run" in cmd for cmd in cmds), cmds)
-        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
-        self.assertEqual(app.job_report(first), first["report"])
+    def test_systemd_refusing_falls_back_to_a_plain_process(self):
+        job = self.start(platform="linux", runner=self.runner(systemd_run=1))
+        self.assertEqual(job["kind"], "process")
+        self.assertNotIn("unit", job)
+        self.assertEqual(job["logoff"], "maybe")
+        self.assertEqual(len(self.spawned), 1)
+        self.assertEqual(app.load_jobs()[0]["kind"], "process")
 
-    def test_during_the_prompt_the_old_result_does_not_pass_for_the_new_scan(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        seen = {}
+    def test_no_user_manager_means_a_plain_process(self):
+        def run(cmd, **kw):
+            self.cmds.append(cmd)
+            return done(cmd, 1)
+        job = self.start(platform="linux", runner=run)
+        self.assertEqual(job["kind"], "process")
+        self.assertFalse(any(c[0] == "systemd-run" for c in self.cmds))
 
-        def runner(cmd, **kw):
-            if "/Create" in cmd:
-                seen["rows"] = {j["id"]: app.job_state(j)[0] for j in app.load_jobs()}
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        second = app.start_background_scan("\\\\srv\\s", [], first["report"], runner=runner)
-        self.assertEqual(seen["rows"][first["id"]], "finished")
-        self.assertEqual(seen["rows"][second["id"]], "creating")
-        self.assertEqual(app.job_state(app.load_jobs()[0])[0], "starting")   # the prompt is over
+    def test_alive_and_end_ask_systemd_about_exactly_this_unit(self):
+        job = self.start(platform="linux", runner=self.runner())
+        states = {"state": b"active"}
 
-    def test_time_at_the_password_prompt_does_not_count_against_the_scan(self):
-        now = [1000.0]
+        def run(cmd, **kw):
+            self.cmds.append(cmd)
+            if cmd[2] == "is-active":
+                return done(cmd, 0, states["state"])
+            if cmd[2] == "stop":
+                states["state"] = b"inactive"
+            return done(cmd)
+        self.write_status(job)
+        self.assertEqual(app.job_row(job, run=run)[0], "running")
+        self.cmds = []
+        app.end_job(job, runner=run)
+        self.assertEqual(self.cmds, [["systemctl", "--user", "stop", job["unit"]]])
+        self.assertEqual(app.job_row(app.load_jobs()[0], run=run)[0], "ended")
 
-        def slow_typist(cmd, **kw):
-            if "/Create" in cmd:
-                now[0] = 2000.0
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        with mock.patch.object(app.time, "time", lambda: now[0]):
-            job = app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"),
-                                            runner=slow_typist)
-            self.assertEqual(app.job_state(job)[0], "starting")
-        self.assertEqual(app.load_jobs()[0]["started"], 2000.0)
-
-    def test_an_old_status_that_stays_keeps_the_earlier_entry_too(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        real = os.remove
-
-        def remove(path):
-            if path == first["status_file"]:
-                raise PermissionError("in use")
-            real(path)
-        with mock.patch.object(app.os, "remove", remove), self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual([j["id"] for j in app.load_jobs()], [first["id"]])
-
-    def test_a_prompt_left_behind_ends_up_removable_and_not_finished(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        record = dict(first, creating=True, started=time.time() - app.CREATING_LIMIT_SECONDS - 1)
-        app._save_job(record)
-        self.assertEqual(app.job_state(record)[0], "silent")
-
-    def test_a_live_scan_with_the_same_report_is_not_disturbed(self):
-        first = self.start()
-        self.write_status(first)
-        with self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual(self.cmds, [])
-        self.assertEqual(app.read_status(first["status_file"])["state"], "running")
-
-    def test_a_scan_with_no_status_may_be_alive_so_its_report_is_not_shared(self):
-        # It may be running and unable to write its status, and would write the same report.
-        first = self.start()
-        record = dict(first, started=time.time() - app.STARTING_GRACE_SECONDS - 1)
-        app._save_job(record)
-        self.assertEqual(app.job_state(record)[0], "silent")
-        with self.assertRaises(app.BackgroundError):
-            self.start()
-        self.assertEqual(self.cmds, [])
-        self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_a_new_scan_replaces_an_earlier_finished_one_with_the_same_report(self):
-        first = self.start()
-        self.write_status(first, state="finished", report=first["report"])
-        second = self.start()
-        self.assertEqual([j["id"] for j in app.load_jobs()], [second["id"]])
-        self.assertIn("/Create", self.cmds[0])       # only once the new task exists
-        self.assertEqual(self.cmds[1][:4], [app.schtasks_exe(), "/Delete", "/TN", first["task"]])
-        self.assertIn("/Run", self.cmds[2])
-
-    # ---- when the steps fail
-
-    def test_run_failure_removes_task_and_record(self):
-        cmds = []
-
-        def runner(cmd, **kw):
-            cmds.append(cmd)
-            return subprocess.CompletedProcess(cmd, 1 if "/Run" in cmd else 0, b"", b"")
-        with self.assertRaises(app.BackgroundError):
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertIn("/Delete", cmds[-1])
-        self.assertEqual(app.load_jobs(), [])
-        self.assertEqual(os.listdir(app.JOBS_DIR), [])
-
-    def test_run_failure_keeps_the_record_if_the_task_could_not_be_removed(self):
-        with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"),
-                                      runner=refusing_scheduler)
-        self.assertIn("Background scans", str(c.exception))
-        self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_missing_schtasks_leaves_no_record(self):
-        def runner(cmd, **kw):
-            raise FileNotFoundError("schtasks")
-        with self.assertRaises(OSError):
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.html"), runner=runner)
-        self.assertEqual(app.load_jobs(), [])
-
-    def test_record_that_cannot_be_written_stops_before_the_prompt(self):
-        with mock.patch.object(app, "_save_job", side_effect=OSError("disk full")), \
-                self.assertRaises(OSError):
-            self.start()
-        self.assertEqual(self.cmds, [])
+    def test_a_unit_name_outside_our_own_is_never_touched(self):
+        job = self.start(platform="linux", runner=self.runner())
+        for unit in ("ssh", "treerot-other", "treerot-" + job["id"] + ".service", ""):
+            with self.subTest(unit=unit):
+                self.cmds = []
+                with self.assertRaises(app.BackgroundError):
+                    app.end_job(dict(job, unit=unit), runner=self.run_ok)
+                self.assertEqual(self.cmds, [])
 
 
 class JobStates(JobCase):
@@ -834,104 +370,144 @@ class JobStates(JobCase):
         self.write_status(job, state="failed", error=7)
         self.assertEqual(app.job_state(job)[0], "failed")
 
+    def test_a_process_gone_while_running_is_stopped_by_logoff_or_restart(self):
+        job = self.start()
+        self.write_status(job)
+        del self.procs[job["pid"]]                   # what logging off does to it
+        state, detail = app.job_state(job)
+        self.assertEqual(state, "stopped")
+        self.assertIn("logged off", detail)
+        self.assertIn("stopped", app.JOB_OVER)
+
+    def test_a_process_gone_before_any_status_is_stopped_at_once(self):
+        job = self.start()
+        del self.procs[job["pid"]]
+        self.assertEqual(app.job_state(job)[0], "stopped")
+
+    def test_a_reused_pid_is_not_the_scan(self):
+        job = self.start()
+        self.write_status(job)
+        self.procs[job["pid"]] = "someone else's program"
+        self.assertEqual(app.job_state(job)[0], "stopped")
+
+    def test_when_the_system_cannot_tell_the_status_file_decides(self):
+        job = self.start()
+        self.write_status(job)
+
+        def unknown(pid, platform=None, run=None):
+            raise OSError("ps did not answer")
+        with mock.patch.object(app, "process_start", unknown):
+            self.assertEqual(app.job_state(job)[0], "running")
+
+    def test_finished_and_failed_win_over_a_process_that_is_gone(self):
+        job = self.start()
+        del self.procs[job["pid"]]
+        self.write_status(job, state="failed", error="x")
+        self.assertEqual(app.job_state(job)[0], "failed")
+
     def test_ended_scan_is_not_shown_as_stopped_by_itself(self):
         job = self.start()
         self.write_status(job, updated=time.time() - 3600)
-        app.end_job(job, runner=self.run_ok)
+        app.end_job(job)
         self.assertEqual(app.job_state(app.load_jobs()[0])[0], "ended")
 
 
-class WhyNotStarted(JobCase):
-    def silent(self):
-        job = self.start("r%s.html" % os.urandom(3).hex())
-        record = dict(job, started=time.time() - app.STARTING_GRACE_SECONDS - 1)
-        app._save_job(record)
-        return record
-
-    def row(self, line, rc=0):
-        """A row the way /Query /V /FO CSV /NH prints it, with this Last Result."""
-        job = self.silent()
-        self.queries = []
-
-        def runner(cmd, **kw):
-            self.queries.append(cmd)
-            return subprocess.CompletedProcess(cmd, rc, line.encode(), b"")
-        return app.job_panel_row(job, runner=runner)
-
-    @staticmethod
-    def csv_line(result):
-        return ('"HOST","\\TreeRot-x","N/A","Ready","Interactive/Background","11/5/2026 1:00:00 AM",'
-                '"%s","DOM\\me","C:\\x, y.exe"\r\n' % result)
-
-    def test_asks_for_exactly_this_task(self):
-        job = self.silent()
-        self.queries = []
-
-        def runner(cmd, **kw):
-            self.queries.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, self.csv_line("267011").encode(), b"")
-        app.job_panel_row(job, runner=runner)
-        self.assertEqual(self.queries, [[app.schtasks_exe(), "/Query", "/TN", job["task"],
-                                         "/V", "/FO", "CSV", "/NH"]])
-
-    def test_known_codes_get_plain_words(self):
-        for result, words in (("-2147023511", "log on as a batch job"), ("2147943785", "log on as a batch job"),
-                              ("-2147023570", "password"), ("2147943726", "password")):
-            with self.subTest(result=result):
-                state, detail, report = self.row(self.csv_line(result))
-                self.assertEqual(state, "silent")
-                self.assertIn(words, detail)
-                self.assertRegex(detail, r"0x8007(0569|052E)")
-                self.assertIsNone(report)
-
-    def test_other_codes_are_shown_in_hex(self):
-        detail = self.row(self.csv_line("-2147024629"))[1]
-        self.assertIn("Windows could not start the task (code 0x8007010B)", detail)
-
-    def test_a_small_code_is_the_program_ending_not_windows_refusing(self):
-        detail = self.row(self.csv_line("2"))[1]
-        self.assertIn("code 0x2", detail)
-        self.assertNotIn("could not start", detail)
-
-    def test_not_yet_run_and_success_keep_the_usual_message(self):
-        usual = self.row("no rows")[1]
-        for result in ("267011", "0"):
-            with self.subTest(result=result):
-                self.assertEqual(self.row(self.csv_line(result))[1], usual)
-
-    def test_running_is_not_an_error(self):
-        detail = self.row(self.csv_line("267009"))[1]
-        self.assertNotIn("could not", detail)
-        self.assertIn("running", detail)
-
-    def test_anything_unexpected_keeps_the_usual_message(self):
-        usual = self.row("no rows")[1]
-        for line in ("", "a,b,c", self.csv_line("Ready"), self.csv_line(""), self.csv_line("1.5"),
-                     "\x00\x01", self.csv_line("99999999999999999999")):
-            with self.subTest(line=line):
-                self.assertEqual(self.row(line)[1], usual)
-        self.assertEqual(self.row(self.csv_line("-2147024891"), rc=1)[1], usual)
-
-    def test_scheduler_trouble_keeps_the_usual_message(self):
-        usual = self.row("no rows")[1]
-        job = self.silent()
-        for error in (app.BackgroundError("no answer"), OSError("no schtasks")):
-            def runner(cmd, **kw):
-                raise error
-            with self.subTest(error=error):
-                self.assertEqual(app.job_panel_row(job, runner=runner)[1], usual)
-
-    def test_only_a_silent_scan_asks_windows(self):
+class EndAndRemove(JobCase):
+    def test_end_stops_exactly_the_process_that_was_started(self):
         job = self.start()
-        self.queries = []
+        app.end_job(job)
+        self.assertEqual(self.stopped, [job["pid"]])
+        record = app.load_jobs()[0]
+        self.assertTrue(record["ended"])
+        self.assertTrue(record["notified"])            # you ended it: no notice
 
-        def runner(cmd, **kw):
-            self.queries.append(cmd)
-            raise AssertionError("asked")
-        self.assertEqual(app.job_panel_row(job, runner=runner)[0], "starting")
-        self.write_status(job)
-        self.assertEqual(app.job_panel_row(job, runner=runner)[0], "running")
-        self.assertEqual(self.queries, [])
+    def test_end_failure_is_reported_and_not_recorded(self):
+        job = self.start()
+
+        def refuse(pid, start, platform=None):
+            raise OSError("Access is denied")
+        with mock.patch.object(app, "stop_process", refuse), self.assertRaises(app.BackgroundError) as c:
+            app.end_job(job)
+        self.assertIn("Access is denied", str(c.exception))
+        self.assertFalse(app.load_jobs()[0].get("ended"))
+
+    def test_remove_forgets_the_scan_and_keeps_report_and_status(self):
+        job = self.start()
+        self.write_status(job, state="finished", report=job["report"])
+        with open(job["report"], "w") as f:
+            f.write("x")
+        app.remove_job(job)
+        self.assertEqual(app.load_jobs(), [])
+        self.assertTrue(os.path.exists(job["report"]))
+        self.assertTrue(os.path.exists(job["status_file"]))
+
+    def test_a_record_not_of_ours_is_never_acted_on(self):
+        job = self.start()
+        for name, bad in (("other id", dict(job, id="20200101-000000-abcd")),
+                          ("path id", dict(job, id=os.path.join("..", "keep"))),
+                          ("unit added", dict(job, unit="treerot-" + job["id"])),
+                          ("task added", dict(job, task="TreeRot-" + job["id"]))):
+            for fn in (app.end_job, app.remove_job):
+                with self.subTest(name=name, fn=fn.__name__), self.assertRaises(app.BackgroundError):
+                    fn(bad)
+        self.assertEqual(self.stopped, [])
+        self.assertEqual(len(app.load_jobs()), 1)
+
+    def test_the_record_on_disk_decides_not_the_copy_in_memory(self):
+        job = self.start()
+        path = os.path.join(app.JOBS_DIR, job["id"] + ".json")
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+        record["pid"] = 1
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(record, f)
+        app.end_job(job)
+        self.assertEqual(self.stopped, [1])           # the pid on disk, never the one passed in
+
+
+class Records(JobCase):
+    def test_load_jobs_skips_anything_that_is_not_our_record(self):
+        job = self.start()
+        for name, text in (("a.json", "{half"), ("b.json", "[1]"),
+                           ("c.json", json.dumps(dict(job, kind="weird"))),
+                           ("d.json", json.dumps(job)),        # the name does not match its id
+                           ("e.json", json.dumps({"id": "e", "task": "TreeRot-e"})),
+                           ("f.json", json.dumps(dict(job, id="f", pid="1")))):
+            with open(os.path.join(app.JOBS_DIR, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        self.assertEqual([j["id"] for j in app.load_jobs()], [job["id"]])
+
+    def test_a_crafted_record_cannot_point_the_panel_at_another_file(self):
+        job = self.start()
+        evil = os.path.join(self.d, "evil.exe")
+        for name, fields in (
+                ("exe", {"report": evil, "status_file": evil + ".status.json"}),
+                ("no extension", {"report": os.path.join(self.d, "r"),
+                                  "status_file": os.path.join(self.d, "r.status.json")}),
+                ("status elsewhere", {"status_file": os.path.join(self.d, "other.json")})):
+            with self.subTest(name):
+                app._save_job(dict(job, **fields))
+                self.assertEqual(app.load_jobs(), [])
+        for report in ("r.html", "r.HTML", "r.pdf", "r.Pdf"):
+            with self.subTest(report):
+                path = os.path.join(self.d, report)
+                app._save_job(dict(job, report=path, status_file=path + ".status.json"))
+                self.assertEqual(len(app.load_jobs()), 1)
+
+    def test_record_files_are_replaced_whole(self):
+        job = self.start()
+        real = app.os.replace
+        with mock.patch.object(app.os, "replace", side_effect=real) as rep:
+            app._save_job(job)
+        rep.assert_called_once()
+        self.assertEqual(rep.call_args[0][1], os.path.join(app.JOBS_DIR, job["id"] + ".json"))
+        self.assertEqual(sorted(os.listdir(app.JOBS_DIR)), [job["id"] + ".json"])
+
+    def test_no_password_anywhere(self):
+        self.start()
+        for name in os.listdir(app.JOBS_DIR):
+            with open(os.path.join(app.JOBS_DIR, name), encoding="utf-8") as f:
+                self.assertNotIn("password", f.read().lower())
 
 
 class JobReport(JobCase):
@@ -958,12 +534,6 @@ class JobReport(JobCase):
         self.assertEqual(state, "finished")
         self.assertIn("not found", detail)
 
-    def test_finished_with_no_report_is_not_replaced_by_an_old_file(self):
-        job = self.start()
-        self.make_report(job)
-        self.write_status(job, state="finished", report=None)
-        self.assertIsNone(app.job_report(job))
-
     def test_a_status_file_cannot_point_somewhere_else(self):
         # The status file sits next to the report, often on a share others can write to.
         job = self.start()
@@ -973,283 +543,285 @@ class JobReport(JobCase):
         self.assertIsNone(app.job_report(job))
 
 
-class OnlyOurTasks(JobCase):
-    def schtasks_calls(self, fn, job):
-        self.cmds = []
-        with self.assertRaises(app.BackgroundError):
-            fn(job, runner=self.run_ok)
-        self.assertEqual(self.cmds, [])
+class OldScheduledTasks(JobCase):
+    """Records from the version that used scheduled tasks with a stored password: they still
+    show, and Remove still deletes the task (and with it the password)."""
 
-    def test_a_task_name_outside_our_own_is_never_touched(self):
-        job = self.start()
-        for name in ("\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", "TreeRot-other", "*",
-                     "TreeRot-" + job["id"] + "x", "treerot-" + job["id"], "",
-                     "\\TreeRot-" + job["id"], "TreeRot\\scan-" + job["id"]):
-            bad = dict(job, task=name)
-            for fn in (app.remove_job, app.end_job):
-                with self.subTest(name=name, fn=fn.__name__):
-                    self.schtasks_calls(fn, bad)
-        self.assertEqual(len(app.load_jobs()), 1)
+    def test_they_still_load_and_show_their_state(self):
+        job = self.legacy()
+        self.assertEqual(app.job_kind(app.load_jobs()[0]), "task")
+        self.write_status(job, state="finished", report=job["report"])
+        self.assertEqual(app.job_state(job)[0], "finished")
 
-    def test_a_well_formed_name_with_no_record_of_ours_is_never_touched(self):
-        job = self.start()
-        other = dict(job, id="20200101-000000-abcd", task="TreeRot-20200101-000000-abcd")
-        self.schtasks_calls(app.remove_job, other)
-        self.schtasks_calls(app.end_job, other)
-
-    def test_the_record_on_disk_decides_not_the_copy_in_memory(self):
-        job = self.start()
-        path = os.path.join(app.JOBS_DIR, job["id"] + ".json")
-        with open(path, encoding="utf-8") as f:
-            record = json.load(f)
-        record["task"] = "TreeRot-20200101-000000-abcd"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f)
-        self.schtasks_calls(app.remove_job, job)
-
-    def test_ids_cannot_reach_outside_the_jobs_folder(self):
-        job = self.start()
-        outside = os.path.join(self.d, "keep.json")
-        open(outside, "w").close()
-        bad = dict(job, id=os.path.join("..", "keep"), task="TreeRot-../keep")
-        self.schtasks_calls(app.remove_job, bad)
-        self.assertTrue(os.path.exists(outside))
-
-    def test_load_jobs_skips_anything_that_is_not_our_record(self):
-        job = self.start()
-        os.makedirs(app.JOBS_DIR, exist_ok=True)
-        for name, text in (("a.json", "{half"), ("b.json", "[1]"),
-                           ("c.json", json.dumps(dict(job, task="\\Microsoft\\x"))),
-                           ("d.json", json.dumps(job)),        # the name does not match its id
-                           ("e.json", json.dumps({"id": "e", "task": "TreeRot-e"}))):
-            with open(os.path.join(app.JOBS_DIR, name), "w", encoding="utf-8") as f:
-                f.write(text)
-        self.assertEqual([j["id"] for j in app.load_jobs()], [job["id"]])
-
-    def test_a_crafted_record_cannot_point_the_panel_at_another_file(self):
-        job = self.start()
-        evil = os.path.join(self.d, "evil.exe")
-        for name, fields in (
-                ("exe", {"report": evil, "status_file": evil + ".status.json"}),
-                ("no extension", {"report": os.path.join(self.d, "r"),
-                                  "status_file": os.path.join(self.d, "r.status.json")}),
-                ("status elsewhere", {"status_file": os.path.join(self.d, "other.json")})):
-            with self.subTest(name):
-                app._save_job(dict(job, **fields))
-                self.assertEqual(app.load_jobs(), [])
-        for report in ("r.html", "r.HTML", "r.pdf", "r.Pdf"):
-            with self.subTest(report):
-                path = os.path.join(self.d, report)
-                app._save_job(dict(job, report=path, status_file=path + ".status.json"))
-                self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_expandable_text_stops_before_any_prompt(self):
-        with self.assertRaises(app.BackgroundError):
-            self.start(args=["--exclude=%TEMP%"])
-        self.assertEqual(self.cmds, [])
+    def test_remove_deletes_exactly_this_task(self):
+        job = self.legacy()
+        app.remove_job(job, runner=self.run_ok)
+        self.assertEqual(self.cmds, [[app.schtasks_exe(), "/Delete", "/TN", job["task"], "/F"]])
         self.assertEqual(app.load_jobs(), [])
 
-    def test_a_report_of_another_type_is_refused_before_any_task_exists(self):
-        # load_jobs would skip its record, leaving a task nobody can see.
-        with self.assertRaises(app.BackgroundError) as c:
-            app.start_background_scan("\\\\srv\\s", [], os.path.join(self.d, "r.txt"), runner=self.run_ok)
-        self.assertIn(".html", str(c.exception))
-        self.assertEqual(self.cmds, [])
-
-    def test_nothing_can_remove_a_scan_during_its_password_prompt(self):
-        # The task may appear a moment later, holding a stored password, with no record.
-        job = self.start()
-        record = dict(job, creating=True, started=time.time())
-        app._save_job(record)
-        self.schtasks_calls(app.remove_job, record)
-        self.schtasks_calls(app.end_job, record)
+    def test_remove_keeps_the_record_while_the_task_still_exists(self):
+        job = self.legacy()
+        with self.assertRaises(app.BackgroundError):
+            app.remove_job(job, runner=refusing_scheduler)
         self.assertEqual(len(app.load_jobs()), 1)
 
-    def test_a_prompt_left_behind_can_be_removed(self):
-        job = self.start()
-        record = dict(job, creating=True, started=time.time() - app.CREATING_LIMIT_SECONDS - 1)
-        app._save_job(record)
-        self.cmds = []
-        app.remove_job(record, runner=self.run_ok)
-        self.assertIn("/Delete", self.cmds[0])
-        self.assertEqual(app.load_jobs(), [])
-
-    def test_end_asks_for_exactly_this_task_and_records_it(self):
-        job = self.start()
-        self.cmds = []
+    def test_end_uses_the_scheduler(self):
+        job = self.legacy()
         app.end_job(job, runner=self.run_ok)
         self.assertEqual(self.cmds, [[app.schtasks_exe(), "/End", "/TN", job["task"]]])
         self.assertTrue(app.load_jobs()[0]["ended"])
 
-    def test_end_failure_is_reported_and_not_recorded(self):
-        job = self.start()
+    def test_a_task_name_outside_our_own_is_never_touched(self):
+        job = self.legacy()
+        for name in ("\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", "TreeRot-other", "*", ""):
+            for fn in (app.remove_job, app.end_job):
+                with self.subTest(name=name, fn=fn.__name__):
+                    self.cmds = []
+                    with self.assertRaises(app.BackgroundError):
+                        fn(dict(job, task=name), runner=self.run_ok)
+                    self.assertEqual(self.cmds, [])
 
-        def fail(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 1, b"", b"Access is denied.")
-        with self.assertRaises(app.BackgroundError) as c:
-            app.end_job(job, runner=fail)
-        self.assertIn("Access is denied.", str(c.exception))
-        self.assertFalse(app.load_jobs()[0].get("ended"))
-
-    def test_remove_keeps_the_record_while_the_task_still_exists(self):
-        job = self.start()
-        with self.assertRaises(app.BackgroundError) as c:
-            app.remove_job(job, runner=refusing_scheduler)
-        self.assertIn("Access is denied.", str(c.exception))
-        self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_remove_forgets_a_task_someone_already_deleted(self):
-        job = self.start()
-        others = b'"\\Other","N/A","Ready"\r\n'
-
-        def gone(cmd, **kw):
-            if "/Query" in cmd:
-                self.assertNotIn("/TN", cmd)    # the list, whatever language it is in
-                return subprocess.CompletedProcess(cmd, 0, others, b"")
-            return subprocess.CompletedProcess(cmd, 1, b"", b"not found")
-        app.remove_job(job, runner=gone)
-        self.assertEqual(app.load_jobs(), [])
-
-    def test_any_doubt_keeps_the_record(self):
-        job = self.start()
-
-        def delete_fails(listing):
-            def run(cmd, **kw):
-                return listing(cmd) if "/Query" in cmd else subprocess.CompletedProcess(cmd, 1, b"", b"x")
-            return run
-
-        def timed_out(cmd, **kw):
-            raise app.BackgroundError("Windows Task Scheduler did not answer.")
-
-        def listing_timed_out(cmd):
-            raise app.BackgroundError("Windows Task Scheduler did not answer.")
-        for name, runner in (
-                ("delete does not answer", timed_out),
-                ("list does not answer", delete_fails(listing_timed_out)),
-                ("list fails", delete_fails(lambda c: subprocess.CompletedProcess(c, 1, b"", b"not found"))),
-                ("list has no output", delete_fails(lambda c: subprocess.CompletedProcess(c, 0, None, b""))),
-                ("list names it", delete_fails(lambda c: subprocess.CompletedProcess(
-                    c, 0, job["task"].encode(), b"")))):
-            with self.subTest(name), self.assertRaises(app.BackgroundError):
-                app.remove_job(job, runner=runner)
-            self.assertEqual(len(app.load_jobs()), 1)
-
-    def test_remove_leaves_report_and_status(self):
-        job = self.start()
-        self.write_status(job, state="finished", report=job["report"])
-        with open(job["report"], "w") as f:
-            f.write("x")
-        app.remove_job(job, runner=self.run_ok)
-        self.assertTrue(os.path.exists(job["report"]))
-        self.assertTrue(os.path.exists(job["status_file"]))
-
-
-class Cleanup(JobCase):
-    def test_final_tasks_are_deleted_and_the_record_stays(self):
-        done, bad, live = self.start("a.html"), self.start("b.html"), self.start("c.html")
-        self.write_status(done, state="finished", report=done["report"])
-        self.write_status(bad, state="failed", error="x")
-        self.write_status(live)
-        self.cmds = []
-        app.clean_finished_jobs(runner=self.run_ok)
-        self.assertEqual(sorted(c[3] for c in self.cmds), sorted([done["task"], bad["task"]]))
-        self.assertTrue(all(c[1] == "/Delete" for c in self.cmds))
-        jobs = {j["id"]: j for j in app.load_jobs()}
-        self.assertEqual(len(jobs), 3)
-        self.assertTrue(jobs[done["id"]]["task_removed"])
-        self.assertFalse(jobs[live["id"]].get("task_removed"))
-        self.cmds = []
-        app.clean_finished_jobs(runner=self.run_ok)      # the next launch has nothing to do
+    def test_nothing_can_remove_one_during_its_password_prompt(self):
+        job = self.legacy(creating=True)
+        with self.assertRaises(app.BackgroundError):
+            app.remove_job(job, runner=self.run_ok)
         self.assertEqual(self.cmds, [])
-        app.remove_job(jobs[done["id"]], runner=self.run_ok)
-        self.assertEqual(self.cmds, [])                  # nor does Remove
+
+    def test_finished_tasks_are_deleted_at_launch_and_new_scans_are_left_alone(self):
+        old = self.legacy()
+        self.write_status(old, state="finished", report=old["report"])
+        new = self.start()
+        self.write_status(new, state="finished", report=new["report"])
+        app.clean_finished_jobs(runner=self.run_ok)
+        self.assertEqual(self.cmds, [[app.schtasks_exe(), "/Delete", "/TN", old["task"], "/F"]])
         self.assertEqual(len(app.load_jobs()), 2)
 
-    def test_tasks_that_may_be_alive_are_left_at_launch(self):
-        silent, stalled = self.start("a.html"), self.start("b.html")
-        app._save_job(dict(silent, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
-        self.write_status(stalled, updated=time.time() - 3600)
-        self.assertEqual(sorted(app.job_state(j)[0] for j in app.load_jobs()), ["silent", "stalled"])
-        self.cmds = []
-        app.clean_finished_jobs(runner=self.run_ok)
-        self.assertEqual(self.cmds, [])
+    def test_why_an_old_task_never_started_is_still_explained(self):
+        job = self.legacy(started=time.time() - app.STARTING_GRACE_SECONDS - 1)
+        line = ('"HOST","\\TreeRot-x","N/A","Ready","Interactive/Background","x",'
+                '"-2147023511","DOM\\me","C:\\x.exe"\r\n')
 
-    def test_a_task_that_could_not_be_deleted_is_tried_again(self):
+        def runner(cmd, **kw):
+            return done(cmd, 0, line.encode())
+        state, detail, _ = app.job_panel_row(job, runner=runner)
+        self.assertEqual(state, "silent")
+        self.assertIn("log on as a batch job", detail)
+
+    def test_new_scans_never_ask_the_scheduler(self):
+        job = self.start()
+        app._save_job(dict(job, started=time.time() - app.STARTING_GRACE_SECONDS - 1))
+
+        def runner(cmd, **kw):
+            raise AssertionError("asked the scheduler")
+        self.assertEqual(app.job_panel_row(app.load_jobs()[0], runner=runner)[0], "silent")
+
+
+class Notices(JobCase):
+    def setUp(self):
+        super().setUp()
+        self.shown = []
+        self.can_show = True
+        p = mock.patch.object(app, "notify", self.fake_notify)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def fake_notify(self, title, body, platform=None, run=None):
+        if self.can_show:
+            self.shown.append((title, body))
+        return self.can_show
+
+    def test_finished_failed_and_stopped_each_say_so_once(self):
+        cases = (("finished", {"state": "finished"}, "finished"),
+                 ("failed", {"state": "failed", "error": "share gone"}, "share gone"),
+                 ("stopped", None, "logged off"))
+        for name, status, words in cases:
+            with self.subTest(name):
+                self.shown = []
+                job = self.start(f"{name}.html")
+                if status:
+                    self.write_status(job, report=job["report"], **status)
+                else:
+                    self.write_status(job)
+                    del self.procs[job["pid"]]
+                self.assertTrue(app.notify_job(job))
+                self.assertEqual(len(self.shown), 1)
+                self.assertIn(job["root"], self.shown[0][1])
+                self.assertIn(words, " ".join(self.shown[0]))
+                record = [j for j in app.load_jobs() if j["id"] == job["id"]][0]
+                self.assertTrue(app.notify_job(record))
+                self.assertEqual(len(self.shown), 1)      # never twice
+
+    def test_a_running_scan_is_not_reported(self):
+        job = self.start()
+        self.write_status(job)
+        self.assertFalse(app.notify_job(job))
+        self.assertEqual(self.shown, [])
+
+    def test_a_scan_you_ended_needs_no_notice(self):
+        job = self.start()
+        app.end_job(job)
+        self.assertTrue(app.notify_job(app.load_jobs()[0]))
+        self.assertEqual(self.shown, [])
+
+    def test_nobody_logged_in_keeps_it_for_the_next_login(self):
         job = self.start()
         self.write_status(job, state="finished", report=job["report"])
-        app.clean_finished_jobs(runner=refusing_scheduler)
-        self.assertFalse(app.load_jobs()[0].get("task_removed"))
+        self.can_show = False
+        self.assertFalse(app.notify_job(job))
+        self.assertFalse(app.load_jobs()[0]["notified"])
+        self.assertIn(app.LOGIN_CHECK_NAME, WINDOWS_RUN_VALUES)
+        self.can_show = True
+        with mock.patch.object(app.sys, "platform", "win32"):
+            app.login_check(delay=0, platform="win32")
+        self.assertEqual(len(self.shown), 1)
+        self.assertTrue(app.load_jobs()[0]["notified"])
+        self.assertNotIn(app.LOGIN_CHECK_NAME, WINDOWS_RUN_VALUES)
 
-    def test_record_files_are_replaced_whole(self):
+    def test_the_scan_itself_reports_when_it_ends(self):
         job = self.start()
-        real = app.os.replace
-        with mock.patch.object(app.os, "replace", side_effect=real) as rep:
-            app._save_job(job)
-        rep.assert_called_once()
-        self.assertEqual(rep.call_args[0][1], os.path.join(app.JOBS_DIR, job["id"] + ".json"))
-        self.assertEqual(sorted(os.listdir(app.JOBS_DIR)), [job["id"] + ".json"])
+        self.write_status(job, state="finished", report=job["report"])
+        app.finish_job_notice(job["id"], job["status_file"])
+        self.assertEqual(len(self.shown), 1)
+
+    def test_a_notice_for_another_status_file_is_ignored(self):
+        job = self.start()
+        self.write_status(job, state="finished", report=job["report"])
+        app.finish_job_notice(job["id"], os.path.join(self.d, "other.status.json"))
+        self.assertEqual(self.shown, [])
+
+    def test_the_scan_never_fails_because_of_a_notice(self):
+        job = self.start()
+        with mock.patch.object(app, "notify_job", side_effect=RuntimeError("boom")):
+            app.finish_job_notice(job["id"], job["status_file"])
 
 
-class ReleaseWorkflow(unittest.TestCase):
-    def step(self):
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            ".github", "workflows", "release.yml")
+class LoginCheck(JobCase):
+    def test_installed_when_a_scan_starts_and_removed_once_all_are_reported(self):
+        job = self.start(platform="win32")
+        self.assertIn(app.LOGIN_CHECK_NAME, WINDOWS_RUN_VALUES)
+        self.assertIn("--login-check", WINDOWS_RUN_VALUES[app.LOGIN_CHECK_NAME])
+        with mock.patch.object(app.sys, "platform", "win32"):
+            app.remove_job(job)
+        self.assertNotIn(app.LOGIN_CHECK_NAME, WINDOWS_RUN_VALUES)
+
+    def test_linux_uses_an_autostart_entry(self):
+        path = os.path.join(app.AUTOSTART_DIR, "treerot-login-check.desktop")
+        app.install_login_check("linux")
         with open(path, encoding="utf-8") as f:
             text = f.read()
-        start = text.index("- name: Test a real background task")
-        return text[start:text.index("\n      - ", start)]
+        self.assertIn("[Desktop Entry]", text)
+        self.assertIn('"--login-check"', text)
+        self.assertIn("NoDisplay=true", text)
+        app.remove_login_check("linux")
+        self.assertFalse(os.path.exists(path))
+        app.remove_login_check("linux")                 # already gone is fine
 
-    def test_the_real_task_must_finish_and_is_always_deleted(self):
-        step = self.step()
-        self.assertNotIn("continue-on-error", step)
-        self.assertIn("finally", step)
-        self.assertLess(step.index("finally"), step.index("schtasks /Delete /TN TreeRot-ci /F"))
-        self.assertIn('-ne "finished"', step)
-        self.assertIn("TreeRot-ci", step)
-        self.assertNotIn("TreeRot\\ci", step)
+    def test_macos_uses_a_launch_agent_of_the_user(self):
+        path = os.path.join(app.LAUNCH_AGENTS_DIR, app.LOGIN_CHECK_LABEL + ".plist")
+        app.install_login_check("darwin")
+        with open(path, "rb") as f:
+            plist = plistlib.load(f)
+        self.assertTrue(plist["RunAtLoad"])
+        self.assertEqual(plist["ProgramArguments"][-1], "--login-check")
+        app.remove_login_check("darwin")
+        self.assertFalse(os.path.exists(path))
 
-    def test_it_uses_no_password(self):
-        step = self.step()
-        self.assertIn("S4U", step)
-        self.assertNotIn("/RP", step)
-        self.assertNotIn("secrets.", step)
+    def test_desktop_exec_quoting(self):
+        self.assertEqual(app._desktop_exec(["/opt/my app/treerot", "--login-check"]),
+                         '"/opt/my app/treerot" "--login-check"')
+        self.assertEqual(app._desktop_exec(['a"b$c`d\\e', "50%"]),
+                         '"a\\\\"b\\\\$c\\\\`d\\\\\\\\e" "50%%"')
+
+    def test_the_login_check_command_runs_without_a_window(self):
+        with mock.patch.object(app, "login_check", return_value=0) as check:
+            self.assertEqual(app.main(["--login-check"]), 0)
+        check.assert_called_once()
+
+
+class Notify(unittest.TestCase):
+    """The real notify() with fake tools: what each system is asked to run."""
+
+    def setUp(self):
+        from tests import helpers
+        self.notify = helpers.REAL_NOTIFY
+        self.cmds = []
+
+    def tool(self, rc=0, display=b"2"):
+        def run(cmd, env=None, **kw):
+            self.cmds.append((cmd, env))
+            if cmd[0] == "loginctl":
+                return done(cmd, 0, display)
+            return done(cmd, rc)
+        return run
+
+    def test_text_is_passed_as_data_never_inside_a_script(self):
+        evil = "'; Remove-Item C:\\ -Recurse; \" $(x) `y`"
+        self.notify("t", evil, platform="win32", run=self.tool())
+        cmd, env = self.cmds[0]
+        self.assertTrue(cmd[0].lower().endswith("powershell.exe"))
+        self.assertNotIn(evil, " ".join(cmd))
+        self.assertEqual(env["TREEROT_BODY"], evil)
+        self.cmds = []
+        self.notify("t", evil, platform="darwin", run=self.tool())
+        cmd = self.cmds[0][0]
+        self.assertEqual(cmd[0], "osascript")
+        self.assertEqual(cmd[-1], evil)
+        self.assertNotIn(evil, " ".join(cmd[:-1]))
+
+    def test_linux_needs_a_desktop_session(self):
+        with mock.patch.object(app.shutil, "which", lambda name: "/usr/bin/" + name):
+            self.assertTrue(self.notify("t", "b", platform="linux", run=self.tool()))
+            self.assertEqual(self.cmds[-1][0][:3], ["notify-send", "--app-name", app.APP_NAME])
+            self.cmds = []
+            self.assertFalse(self.notify("t", "b", platform="linux", run=self.tool(display=b"")))
+            self.assertFalse(any(c[0] == "notify-send" for c, _ in self.cmds))
+
+    def test_a_tool_that_fails_means_not_shown(self):
+        with mock.patch.object(app.shutil, "which", lambda name: "/usr/bin/" + name):
+            self.assertFalse(self.notify("t", "b", platform="linux", run=self.tool(rc=1)))
+        self.assertFalse(self.notify("t", "b", platform="darwin", run=self.tool(rc=1)))
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc")
+class ProcessIdentity(unittest.TestCase):
+    def test_this_process_has_a_start_and_a_missing_one_has_none(self):
+        start = app.process_start(os.getpid())
+        self.assertTrue(start)
+        self.assertEqual(app.process_start(os.getpid()), start)
+        self.assertIsNone(app.process_start(2 ** 22 + 12345))
+        self.assertIsNone(app.process_start(0))
+        self.assertIsNone(app.process_start(True))
+
+    def test_stop_refuses_a_process_that_is_not_the_one_started(self):
+        with mock.patch.object(app.os, "killpg") as kill:
+            self.assertFalse(app.stop_process(os.getpid(), "not its start time"))
+            self.assertFalse(app.stop_process(os.getpid(), None))
+        kill.assert_not_called()
 
 
 class WholeCommand(JobCase):
-    def test_the_real_command_scans_and_finishes(self):
-        """Everything but Task Scheduler: this runs the exact program and arguments the task
-        would run, parsed the way Windows would, on a folder with spaces and non-English
-        letters, and follows the result the way the panel does."""
-        root = os.path.join(self.d, "שיתוף עם רווח & <co>" if sys.platform != "win32"
-                            else "שיתוף עם רווח & co")
+    def test_the_real_worker_scans_finishes_and_is_followed(self):
+        """Everything but the detached launch: this runs the exact worker command line on a
+        folder with spaces and non-English letters, and follows it the way the panel does."""
+        root = os.path.join(self.d, "שיתוף עם רווח & co")
         os.makedirs(os.path.join(root, "keep"))
         os.makedirs(os.path.join(root, "-skip me"))
         with open(os.path.join(root, "-skip me", "f.txt"), "w") as f:
             f.write("x")
         out = os.path.join(self.d, "דוח & co")
         os.makedirs(out)
-        seen = {}
-
-        def runner(cmd, **kw):
-            if "/Create" in cmd:
-                name = re.search(r"/XML (\S+) ", cmd).group(1)
-                with open(os.path.join(kw["cwd"], name), "rb") as f:
-                    seen["xml"] = ET.fromstring(f.read())
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
         csv_out = os.path.join(out, "rows.csv")
-        args = app.background_args("2024-01-01", "", ["-skip me"], created=False,
-                                   follow_symlinks=False, precount=False) + ["-o", csv_out]
-        job = app.start_background_scan(root, args, os.path.join(out, "r.html"), runner=runner)
-        exe = seen["xml"].find("t:Actions/t:Exec/t:Command", NS).text
-        line = seen["xml"].find("t:Actions/t:Exec/t:Arguments", NS).text
-        env = dict(os.environ, HOME=self.d, USERPROFILE=self.d)   # no real settings file is touched
-        res = subprocess.run([exe] + windows_argv(line), env=env, capture_output=True, timeout=120)
+        args = app.background_args("2024-01-01", "", ["-skip me"], created=False) + ["-o", csv_out]
+        job = app.start_background_scan(root, args, os.path.join(out, "r.html"),
+                                        runner=self.run_ok, spawn=self.fake_spawn, platform="win32")
+        env = dict(os.environ, HOME=self.d, USERPROFILE=self.d,   # no real settings or jobs
+                   XDG_CONFIG_HOME=os.path.join(self.d, "config"))
+        res = subprocess.run(self.spawned[0], env=env, capture_output=True, timeout=120)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(app.job_state(job)[0], "finished")
         self.assertEqual(app.job_report(job), job["report"])
         with open(csv_out, encoding="utf-8-sig") as f:
-            rows = f.read()
-        self.assertIn("1 folder(s) excluded", rows)
+            self.assertIn("1 folder(s) excluded", f.read())
 
 
 if __name__ == "__main__":

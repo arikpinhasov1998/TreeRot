@@ -36,43 +36,51 @@ class Branding(unittest.TestCase):
 
 
 class Readme(unittest.TestCase):
-    SECTION = "Set up a background scan by hand"
+    SECTION = "Run in background"
 
     def _readme(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
             return f.read()
 
-    def test_the_section_the_window_points_at_exists(self):
+    def _section(self):
+        import re
+        return re.search(r"(?ms)^### Run in background\n.*?(?=^### )", self._readme()).group(0)
+
+    def test_the_background_section_exists(self):
         import re
         self.assertRegex(self._readme(), r"(?m)^#{2,3} " + re.escape(self.SECTION) + r"$")
-
-    def test_the_failure_messages_name_that_section(self):
-        with self.assertRaises(app.BackgroundError) as c:
-            app.task_create_command("T", "x.xml", "a&b", platform="win32", environ={})
-        self.assertIn(self.SECTION, str(c.exception))
 
     def test_no_personal_or_temporary_path_in_the_readme(self):
         text = self._readme()
         for bad in ("/Users/", "/home/", "C:\\Users", "/tmp/", "/private/"):
             self.assertNotIn(bad, text)
 
+    def test_background_scans_ask_for_no_password_or_administrator(self):
+        text = " ".join(self._section().split())
+        self.assertIn("No administrator rights, no password and no installation", text)
+        self.assertNotIn("Type it there", text)
+        self.assertNotIn("console window", text)
 
-    def test_the_manual_route_does_not_call_expanding_names_fine(self):
-        text = self._readme()
-        self.assertNotIn("are fine here", text)
-        self.assertIn("Avoid `%NAME%` and `$(...)` in paths here as well", text)
+    def test_the_login_items_named_match_the_program(self):
+        text = self._section()
+        self.assertIn(app.LOGIN_CHECK_NAME, text)
+        self.assertIn(app.LOGIN_CHECK_LABEL + ".plist", text)
+        self.assertIn("treerot-login-check.desktop", text)
+        self.assertIn(app.WINDOWS_RUN_KEY, text.replace("\\\\", "\\"))
 
-    def test_the_button_is_no_longer_said_to_send_awkward_names_to_the_manual_route(self):
-        text = " ".join(self._readme().split())
-        self.assertNotIn("Use the manual route for these names", text)
-        self.assertNotIn("refuses your user name or path", text)
-        self.assertIn("Use this when the button refuses your user name,", text)
-        self.assertIn("If your folder name has them, scan its parent folder instead", text)
+    def test_each_system_says_what_logging_off_does(self):
+        text = self._section()
+        for line in ("| Logging off, **Windows** | Stops | Stops |",
+                     "| Logging out, **macOS** | Stops | Stops |",
+                     "| Logging out, **Linux** | Stops | Keeps running"):
+            self.assertIn(line, text)
 
-    def test_the_checklist_covers_a_report_on_a_network_path(self):
+    def test_the_checklist_covers_a_report_on_a_network_path_and_logging_off(self):
         import re
-        item = re.search(r"(?ms)^15\. .*?(?=^16\. )", self._readme()).group(0)
-        self.assertIn("\\\\server\\share", item)
+        text = self._readme()
+        item = re.search(r"(?ms)^8\. .*?(?=^9\. )", text).group(0)
+        self.assertIn("network path", item)
+        self.assertIn("log off", re.search(r"(?ms)^10\. .*?(?=^11\. )", text).group(0))
 
     def test_the_readme_does_not_say_ci_has_run(self):
         text = " ".join(self._readme().split())

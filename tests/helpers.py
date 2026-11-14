@@ -17,6 +17,14 @@ app.SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".treerot.json")
 app.OLD_SETTINGS_FILE = os.path.join(_SETTINGS_DIR, ".folder_activity_scanner.json")
 # Nor the real list of background scans: a window opened by a test reads it.
 app.JOBS_DIR = os.path.join(_SETTINGS_DIR, "jobs")
+# Nor the real login items, and no real notification pops up during a test.
+app.AUTOSTART_DIR = os.path.join(_SETTINGS_DIR, "autostart")
+app.LAUNCH_AGENTS_DIR = os.path.join(_SETTINGS_DIR, "LaunchAgents")
+WINDOWS_RUN_VALUES = {}
+app._set_windows_run_value = lambda name, value: (WINDOWS_RUN_VALUES.pop(name, None) if value is None
+                                                  else WINDOWS_RUN_VALUES.__setitem__(name, value))
+REAL_NOTIFY = app.notify
+app.notify = lambda title, body, platform=None, run=None: False
 
 OLD = datetime(2019, 1, 1).timestamp()
 NEW = datetime(2026, 1, 1).timestamp()
